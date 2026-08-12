@@ -1,4 +1,291 @@
-const app=document.querySelector('#app'); const params=new URLSearchParams(location.search); const role=params.get('role'); let session=params.get('session')||'1', playerId=localStorage.getItem('philips-player-'+session), state, selected, submittedQuestion=null, joinScreenShown=false;
+const app=document.querySelector('#app'); const params=new URLSearchParams(location.search); const role=params.get('role'); let session=params.get('session')||'1', playerId=localStorage.getItem('philips-player-'+session), state, selected, submittedQuestion=null, joinScreenShown=false,lastRenderKey='';
+const api=(path='',opts={})=>{const suffix=path===''&&playerId?'?playerId='+encodeURIComponent(playerId):'';return fetch('/api/sessions/'+session+path+suffix,{headers:{'Content-Type':'application/json'},...opts}).then(async r=>{const x=await r.json();if(!r.ok)throw Error(x.error);return x})};
+const ownerId=localStorage.getItem('philips-owner-id')||crypto.randomUUID(); localStorage.setItem('philips-owner-id',ownerId);
+const quizApi=(path='',opts={})=>fetch('/api/quizzes'+path,{headers:{'Content-Type':'application/json'},...opts}).then(async r=>{const x=await r.json();if(!r.ok)throw Error(x.error);return x});
+const translations={'Създавайте, управлявайте и провеждайте Philips quiz-ове на живо за обучения, търговски събития и продуктови сесии.':'Create, manage and run live Philips-branded quizzes for trainings, sales events and product knowledge sessions.','Създай quiz':'Create Quiz','Включи се в quiz':'Join Quiz','Всички quiz-ове':'All Quizzes','за всеки въпрос':'per question','за верен отговор':'for a correct answer','КАК РАБОТИ':'HOW IT WORKS','Готови за следващата ви сесия':'Ready for your next session','Създайте quiz':'Create a quiz','Подгответе въпроси и отговори за вашата Philips аудитория.':'Prepare questions and answers for your Philips audience.','Споделете кода':'Share the code','Участниците се включват бързо с кратък 6-цифрен код.':'Participants join quickly with a short 6-digit code.','Пуснете го на живо':'Run it live','Стартирайте сесията, следете класацията и разкрийте победителите.':'Start the session, follow the leaderboard and reveal the winners.','СЪЗДАДЕНО ЗА PHILIPS СЕСИИ':'DESIGNED FOR PHILIPS SESSIONS','Фокус върху знанието. Енергия за екипа.':'Focus on knowledge. Energy for the team.','Обучения за търговски екипи':'Sales floor staff trainings','Игри с продуктови знания':'Product knowledge games','Вътрешни събития':'Internal events','Категорийни презентации':'Category presentations','НОВ QUIZ':'NEW QUIZ','Създайте своя quiz':'Create your quiz','Quiz Maker формата ще бъде следващата стъпка. Тук ще добавяте име, категория, въпроси и верни отговори.':'The Quiz Maker form is the next step. This is where you will add a name, category, questions and correct answers.','Подготвено за следващо развитие:':'Ready for the next phase:','Към моите quiz-ове':'Go to My Quizzes','ЗА УЧАСТНИЦИ':'FOR PARTICIPANTS','Включете се в quiz':'Join a quiz','Въведете 6-цифрения код, който ви е споделил водещият.':'Enter the 6-digit code shared by the host.','Продължи':'Continue','За текущите demo сесии използвайте:':'For the current demo sessions, use:','МОИТЕ QUIZ-ОВЕ':'MY QUIZZES','Търси по име на quiz':'Search by quiz name','Все още нямате създадени quiz-ове.':'You have not created any quizzes yet.','Създайте първия си quiz, за да го управлявате оттук.':'Create your first quiz to manage it here.','Начало':'Home','Изберете сесия':'Choose a session','Тази опция запазва съществуващите live сесии.':'This option keeps the existing live sessions available.','Към Quiz Maker':'Go to Quiz Maker','Добре дошли':'Welcome','Готови ли сте?':'Ready to join?','Въведете име, с което да се показвате в класацията.':'Enter the name you would like to display on the leaderboard.','Вашето име':'Your name','Отговорът е записан':'Your answer is recorded','Благодарим!':'Thank you!','Изчакайте времето за въпроса да изтече.':'Please wait for the question timer to finish.','Въпрос':'Question','от':'of','Вашият резултат:':'Your score:','Правилен отговор!':'Correct answer!','Верният отговор':'Correct answer','Резултат от рунда':'Round result','Вашият отговор:':'Your answer:','верен':'correct','грешен':'incorrect','Няма записан отговор.':'No answer was recorded.','Верният отговор е:':'The correct answer is:','Получавате':'You earned','Класация':'Leaderboard','Следващ въпрос след':'Next question in','сек.':'sec.','Финал':'Final','Благодарим за участието!':'Thank you for taking part!','Управление':'Host controls','остава време за отговор':'time remaining to answer','Верният отговор е показан на всички за 10 секунди':'The correct answer is shown to everyone for 10 seconds','Quiz-ът приключи':'The quiz has finished','Готови за старт':'Ready to start','Участници:':'Participants:','Отговорили:':'Answered:','Стартирай quiz-а':'Start Quiz','Нулирай сесията':'Reset Session','Участниците влизат на:':'Participants join at:','Quiz-ът още не е стартиран':'The quiz has not started yet','Тази страница трябва да се отвори през quiz сървъра, а не директно като файл.':'This page must be opened through the quiz server, not directly as a file.','Към началната страница':'Go to Home'};
+translations[' т.']=' pts.';
+const localize=content=>Object.entries(translations).reduce((html,[from,to])=>html.split(from).join(to),content);
+const shell=(content)=>app.innerHTML=`<section class="shell"><header class="top"><img class="logo" src="/assets/philips-logo.png" alt="Philips"><span class="pill"><i></i> LIVE QUIZ</span></header><div class="content">${localize(content)}</div></section>`;
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const englishQuestions=[
+['Hair Care','What is the name of the newest premium Philips hair-care range?',['Philips Aqua SenseIQ','Philips MoistureCare Pro','Philips StyleSense Elite','Philips HydroGlow Premium'],0],
+['Hair Care','What percentage of the hair’s natural moisture does Philips Aqua SenseIQ preserve?',['85%','90%','95%','99.9%'],3],
+['Lumea','For how many years of smooth skin can users expect from the Philips Lumea Series 9900 Pro?',['Up to 2 years','Up to 3 years','Up to 5 years','Up to 6 months'],2],
+['Lumea','What hair-reduction result can users expect after only two sessions?',['50%','65%','80%','90%'],2],
+['Sonicare','What additional information does the Sonicare DiamondClean 9900 Prestige provide?',['Real-time guidance for different areas of the mouth','Real-time pressure information','Personalised guidance for better brushing','All of the above'],3],
+['Sonicare','How many cleaning modes does the Sonicare DiamondClean 9900 Prestige have?',['5 modes and 3 intensities','6 modes and 3 intensities','8 modes and 3 intensities','10 modes and 3 intensities'],2],
+['Grooming','How close does the Philips i9000 Prestige Ultra shave with the Lift & Cut system?',['0.08 mm','-0.02 mm','-0.08 mm','0 mm'],2],
+['Grooming','How many operating modes does the Philips i9000 Prestige Ultra have?',['3 modes','4 modes','5 modes','1 mode'],2],
+['Hair Care','What is the main benefit of SenseIQ technology in Philips hair-care appliances?',['It measures and adapts temperature to the hair’s needs','It maximises temperature for faster styling','It works only with a preselected mode','It uses one temperature profile for all hair types'],0],
+['Lumea','What helps users choose a suitable setting when using Philips Lumea?',['Automatic hair-length recognition','A skin-tone sensor and intensity recommendation','Skin-moisture measurement','Clothing-colour recognition'],1]
+];
+function home(){clearInterval(window.tick);shell(`<div class="home"><section class="hero"><div class="eyebrow">PHILIPS LEARNING EXPERIENCES</div><h1>Philips Quiz Maker</h1><p class="hero-copy">Създавайте, управлявайте и провеждайте Philips quiz-ове на живо за обучения, търговски събития и продуктови сесии.</p><div class="hero-actions"><button class="primary" onclick="showCreate()">Създай quiz</button><button class="outline" onclick="showJoinCode()">Включи се в quiz</button><button class="text-action" onclick="showLibrary()">Всички quiz-ове <span>→</span></button></div><div class="hero-stat"><b>20 sec.</b><span>per question</span><b>1,000 pts.</b><span>for a correct answer</span></div></section><section class="home-section"><div class="eyebrow">КАК РАБОТИ</div><h2>Готови за следващата ви сесия</h2><div class="how-grid"><article class="how-card"><i>01</i><h3>Създайте quiz</h3><p>Подгответе въпроси и отговори за вашата Philips аудитория.</p></article><article class="how-card"><i>02</i><h3>Споделете кода</h3><p>Участниците се включват бързо с кратък 6-цифрен код.</p></article><article class="how-card"><i>03</i><h3>Пуснете го на живо</h3><p>Стартирайте сесията, следете класацията и разкрийте победителите.</p></article></div></section><section class="use-case"><div><div class="eyebrow">СЪЗДАДЕНО ЗА PHILIPS СЕСИИ</div><h2>Фокус върху знанието. Енергия за екипа.</h2></div><ul><li>Обучения за търговски екипи</li><li>Игри с продуктови знания</li><li>Вътрешни събития</li><li>Категорийни презентации</li></ul></section><footer class="home-footer"><span>© Philips Quiz Maker</span><span>Live learning, simply made.</span></footer></div>`)}
+function choose(){shell(`<div class="center"><div class="eyebrow">Live quiz</div><h1>Изберете сесия</h1><p class="muted">Тази опция запазва съществуващите live сесии.</p><div class="grid">${[1,2,3].map(i=>`<button class="session" onclick="location='?session=${i}'">СЕСИЯ ${i}</button>`).join('')}</div><p><a href="/">Към Quiz Maker</a></p></div>`)}
+let makerDraft=null,editingQuizId=null;
+const makerQuizzes=()=>JSON.parse(localStorage.getItem('philips-created-quizzes')||'[]');
+const saveMakerQuizzes=items=>localStorage.setItem('philips-created-quizzes',JSON.stringify(items));
+const newQuestion=()=>({text:'',answers:['',''],correct:0,image:''});
+const newDraft=()=>({name:'',description:'',category:'',creator:'',createdAt:new Date().toISOString(),questions:[newQuestion()]});
+const uniqueCode=()=>{let code;const used=new Set(makerQuizzes().map(q=>q.code));do{code=String(Math.floor(100000+Math.random()*900000))}while(used.has(code));return code};
+function showCreate(id=null){editingQuizId=id;const existing=id&&makerQuizzes().find(q=>q.id===id);makerDraft=existing?JSON.parse(JSON.stringify(existing)):newDraft();renderCreate()}
+function renderCreate(){const q=makerDraft;shell(`<div class="maker"><button class="back" onclick="showLibrary()">← Back to My Quizzes</button><div class="eyebrow">${editingQuizId?'EDIT QUIZ':'NEW QUIZ'}</div><h1>${editingQuizId?'Edit Quiz':'Create a Quiz'}</h1><p class="muted">Build a live multiple-choice quiz for your Philips session.</p><section class="form-card"><h2>Quiz information</h2><div class="form-grid"><label>Quiz name<input id="maker-name" value="${esc(q.name)}" placeholder="e.g. Sonicare product knowledge" oninput="makerDraft.name=this.value"></label><label>Category<input id="maker-category" value="${esc(q.category)}" placeholder="e.g. Oral Health Care" oninput="makerDraft.category=this.value"></label><label>Creator name<input id="maker-creator" value="${esc(q.creator)}" placeholder="Your name" oninput="makerDraft.creator=this.value"></label><label>Date created<input value="${new Date(q.createdAt).toLocaleDateString('en-GB')}" disabled></label></div><label>Description<textarea placeholder="What is this quiz about?" oninput="makerDraft.description=this.value">${esc(q.description)}</textarea></label></section><div class="question-heading"><div><div class="eyebrow">QUESTIONS</div><h2>${q.questions.length} question${q.questions.length===1?'':'s'}</h2></div><button class="outline compact" onclick="addMakerQuestion()">+ Add Question</button></div>${q.questions.map((question,index)=>questionEditor(question,index)).join('')}<div class="maker-actions"><button class="outline" onclick="showLibrary()">Cancel</button><button class="primary" onclick="saveMakerQuiz()">Save Quiz</button></div></div>`)}
+function questionEditor(q,i){return `<section class="question-editor"><div class="question-top"><b>Question ${i+1}</b>${makerDraft.questions.length>1?`<button class="icon-button" onclick="removeMakerQuestion(${i})" aria-label="Remove question">Remove</button>`:''}</div><label>Question text<textarea placeholder="Type your question" oninput="makerDraft.questions[${i}].text=this.value">${esc(q.text)}</textarea></label><label class="upload-label">Optional image<input type="file" accept="image/*" onchange="uploadQuestionImage(event,${i})"><span>${q.image?'Image added — replace image':'Upload an image'}</span></label>${q.image?`<img class="question-image" src="${q.image}" alt="Question ${i+1} image">`:''}<div class="answers-editor"><div class="answers-title"><b>Answer options</b><span>Select the correct answer</span></div>${q.answers.map((answer,a)=>`<div class="answer-row"><input type="radio" name="correct-${i}" ${q.correct===a?'checked':''} onchange="makerDraft.questions[${i}].correct=${a}"><input value="${esc(answer)}" placeholder="Answer option ${a+1}" oninput="makerDraft.questions[${i}].answers[${a}]=this.value"><button class="remove-answer" ${q.answers.length<=2?'disabled':''} onclick="removeMakerAnswer(${i},${a})" aria-label="Remove answer">×</button></div>`).join('')}<button class="add-option" onclick="addMakerAnswer(${i})">+ Add answer opt��h��춻�q�^u[ۊ
+^�XZ�\��Y��]Y\�[ۜ˜\�
+�]�]Y\�[ۊ
+JNܙ[�\�ܙX]J
+_B��[��[ۈ�[[ݙSXZ�\�]Y\�[ۊJ^�XZ�\��Y��]Y\�[ۜ˜�X�JKJNܙ[�\�ܙX]J
+_B��[��[ۈYXZ�\�[���\�J^�XZ�\��Y��]Y\�[ۜ��WK�[���\�˜\�
+	��Nܙ[�\�ܙX]J
+_B��[��[ۈ�[[ݙSXZ�\�[���\�KJ^��ۜ�O[XZ�\��Y��]Y\�[ۜ��WN�K�[���\�˜�X�JKJN�Y�K��ܜ�X��\K�[���\�˛[��
+\K��ܜ�X�\K�[���\�˛[��LNܙ[�\�ܙX]J
+_B��[��[ۈ\�Y]Y\�[ے[XY�J]�[�J^��ۜ��[OY]�[��\��]��[\��N�Y�Y�[J\�]\���Y�Y�[K�\K��\���]
+	�[XY�K��J\�]\��[\�
+	�X\�H����H[�[XY�H�[K��N��ۜ��XY\�[�]��[T�XY\�
+NܙXY\��ۛ�YJ
+OO���ۜ�[XY�O[�]�[XY�J
+N�[XY�K�ۛ�YJ
+OO���ۜ�X^LL���[OSX]�Z[�KX^�X]�X^
+[XY�K��Y[XY�K�ZY�
+JK�[��\�Y��[Y[��ܙX]Q[[Y[�
+	��[��\��N��[��\˝�YSX]���[�
+[XY�K��Y
+���[JN��[��\˚ZY�SX]���[�
+[XY�K�ZY�
+���[JN��[��\˙�]�۝^
+	̙	�K��]�[XY�J[XY�K�[��\˝�Y�[��\˚ZY�
+N�XZ�\��Y��]Y\�[ۜ��WK�[XY�OX�[��\˝�]UT�
+	�[XY�KڜY����
+Nܙ[�\�ܙX]J
+_N�[XY�K�ۙ\��܏J
+OO�[\�
+	�\�[XY�H��[���H���\��Y�X\�H�H[��\��[K��N�[XY�K�ܘ�\�XY\���\�[NܙXY\���XY\�]UT�
+�[J_B�\�[���[��[ۈ�]�SXZ�\�]Z^�
+^��ۜ�O[XZ�\��Y��Y�\K��[YK��[J
+_\K�ܙX]܋��[J
+J\�]\��[\�
+	�X\�HYH]Z^��[YH[�ܙX]܈�[YK��N�Y�K�]Y\�[ۜ˜��YJO�^�^��[J
+_�[���\�˜��YJOO�XK��[J
+JJJ\�]\��[\�
+	�X\�H��\]H]�\�H]Y\�[ۈ[�[���\��[ۋ��N��^�]�X�ܙ�Y�Y][��]Z^�Y
+^ܙX�ܙ^ˋ��KY�Y][��]Z^�YN�Y[�H�X�ܙX]�Z]]Z^�\J	���Y]�����	���N���Ӌ���[��Y�Jˋ��K�ۙ\���ۙ\�YJ_JN��ۜ�[[XZ�\�]Z^��\�
+K�^YY][��]Z^�Y�[�X\
+O��YOOYY][��]Z^�YܙX�ܙ�
+N�ܙX�ܙ���[N��]�SXZ�\�]Z^��\��^
+N��YJ
+_X�]�
+\��܊^��ۜ��K�\��܊\��܊N�[\�
+\��܋�Y\��Y�_	�\�]Z^���[���H�]�Y�X\�H�HY�Z[���__B��[��[ۈ��қ�[���J
+^��[
+]��\��H������[�Y��ȏ��]ۈ�\��H��X�Ȉۘ�X��H��YJ
+H����4't,4a�,4.�/�؝]ۏ�]��\��H�^YX���ȏ�%�$4(�)�$4(t(�'t&4)�&�]��O�$�.�.�c�a�-t`�-H4`t-H4,�]Z^��O��\��H�]]Y��$�b�,�-t-4-t`�-H
+�ta�.4a4`4-t/t.4c�4.�/�-4.�/�.t`�/�4,�.4-H4`t/�/�-4-t.�.4.�4,�/�-4-tbt.4c�`����[�]YH�]Z^�X��H�[�][�OH��[Y\�XȈX^[��H���X�Z�\�H��\�XK[X�[H��ta�.4a4`4-t/H]Z^�4.�/�-���]ۈ�\��H��[X\�H�ۘ�X��H�X��\]Z^���J
+H��'�`4/�-4b�.�-�.؝]ۏ��\��H�[\���%�,4`�-t.�`�bt.4`�-H[[�4`t-t`t.4.4.4-�/�/�.�-�,�,4.t`�-N�LKL�4.4.�.Lˏ���]��
+_B�\�[���[��[ۈX��\]Z^���J
+^��ۜ���OY��[Y[��]Y\�T�[X�܊	��]Z^�X��I�K��[YK��[J
+N��ۜ�X\^�LN�KL���LΌ�N�Y�X\���WJ\�]\����][ۏX��\��[ۏI�X\���W_X��^��ۜ�]Z^�X]�Z]]Z^�\J	����K���[���UT�P��\ۙ[�
+��JJN���][ۏX��\��[ۏI�]Z^��YXX�]�
+J^�[\�
+K�Y\��Y�J__B��[��[ۈ���X��\�J�X\��I��^��ۜ��ܙY[XZ�\�]Z^��\�
+K�[\�Y\�ܙY��[\�OO�K��[YK����\��\�J
+K�[��Y\��X\������\��\�J
+JJN��[
+]��\��H�XZ�\�X��\�H���]ۈ�\��H��X�Ȉۘ�X��H��YJ
+H�����YO؝]ۏ�]��\��H�X��\�KZXY��]��]��\��H�^YX���ȏ�VHURV��T��]��O�[]Z^��\��O��]���]ۈ�\��H��[X\�H��\X��ۘ�X��H����ܙX]J
+H���ܙX]H]Z^�؝]ۏ��]��[�]�\��H��X\����[YOH��\���X\��
+_H�X�Z�\�H��X\���H]Z^��[YH�\�XK[X�[H��X\���H]Z^��[YH�ۚ[�]H����X��\�J\˝�[YJH��ٚ[\�Y�[���]��\��H�]Z^�[X��\�H��ٚ[\�Y�X\
+OO�\�X�H�\��H�]Z^�[X��\�KX�\���]��\��H��\�\�]\�	�K��]\�	��Y�	�K����\��\�J
+_H��O��O��K��]\�	��Y�	�O�]�����\��K��[YJ_O�����\��K�\�ܚ\[۟	ӛ�\�ܚ\[ۈYYY]��_O��]��\��H�]Z^�[Y]H���[���\��K��]Y�ܞ_	�[��]Y�ܚ\�Y	�_O��[���[���K�]Y\�[ۜ˛[��H]Y\�[ۉ�K�]Y\�[ۜ˛[��OOLO��Ή���O��[���[����N����K���_O؏���[���[��ۙ]�]JK�ܙX]Y]
+K����[Q]T��[��	�[�QЉ�_O��[���]��]��\��H��\�XX�[ۜȏ��]ۈ�\��H��X[�ۘ�X��H��[�]Z^�	��K�YI�H���[�؝]ۏ��]ۈ�\��H��[X\�H�X[�ۘ�X��H����X[�Y�J	��K�YI�H��X[�Y�O؝]ۏ��]ۈ�\��H��X[�ۘ�X��H����ܙX]J	��K�YI�H��Y]؝]ۏ��]ۈ�\��H��X[�ۘ�X��H�\X�]T]Z^�	��K�YI�H��\X�]O؝]ۏ��]ۈ�\��H��X[�ۘ�X��H��X�T]Z^��]\�	��K�YI�H���]	�K��]\�OOI��Y�	���X�]�IΜK��]\�OOI�X�]�I���[�X�]�IΉ��Y�	�O؝]ۏ��]ۈ�\��H��X[[��\��ۘ�X��H�[]T]Z^�	��K�YI�H��[]O؝]ۏ��]���\�X�O�
+K���[�	��_O�]���]��\��H�[\K\�]H��]��\��H�[\KZX�ۈ��� O�]������ܙY�[���ӛ�]Z^��\���[�	Ήӛ�]Z^��\�Y]	�O؏����ܙY�[�����HHY��\�[�]Z^��[YK�Ή�ܙX]H[�\��\��[\�]Z^�[�XZ�H[�\��^�\��[ۈ[�\�X�]�K��O���]ۈ�\��H��[X\�H�ۘ�X��H����ܙX]J
+H��ܙX]H]Z^�؝]ۏ��]��O�]��
+_B��[��[ۈ\X�]T]Z^�Y
+^��ۜ�ܚY�[�[[XZ�\�]Z^��\�
+K��[�
+OO�K�YOOZY
+N�Y�[ܚY�[�[
+\�]\����ۜ���O^ˋ����Ӌ�\��J��Ӌ���[��Y�JܚY�[�[
+JKY�ܞ\˜�[��UURQ
+
+K�[YN�	�ܚY�[�[��[Y_H
+��JX��N�[�\]YP��J
+KܙX]Y]��]�]J
+K��T����[��
+K�]\Ή�X�]�I�N��]�SXZ�\�]Z^��\����K���XZ�\�]Z^��\�
+WJN����X��\�J
+_B��[��[ۈ[]T]Z^�Y
+^�Y�X�ۙ�\�J	�[]H\�]Z^��\��[����H[�ۙK��J\�]\����]�SXZ�\�]Z^��\�XZ�\�]Z^��\�
+K��[\�OO�K�YOOZY
+JN����X��\�J
+_B��[��[ۈ���T]Z^�Y
+^��]�SXZ�\�]Z^��\�XZ�\�]Z^��\�
+K�X\
+OO�K�YOOZY�ˋ��K�]\ΜK��]\�OOI�X�]�I���[�X�]�IΉ�X�]�I�N�JJN����X��\�J
+_B�\�[���[��[ۈ�X�T]Z^��]\�Y
+^��ۜ�O[XZ�\�]Z^��\�
+K��[�
+O��YOOZY
+N�Y�\J\�]\����^�Y�ZY��\���]
+	�W��J^��ۜ�ܙX]YX]�Z]]Z^�\J	���Y]�����	���N���Ӌ���[��Y�Jˋ��K�ۙ\���ۙ\�YJ_JN��]�SXZ�\�]Z^��\�XZ�\�]Z^��\�
+K�X\
+O��YOOZY�ܙX]Y�
+JNܙ]\���X�T]Z^��]\�ܙX]Y�Y
+_X�ۜ���[X[�\K��]\�OOI��Y�	�K��]\�OOI�[�X�]�I���X�]�]IΉ�XX�]�]I���ۜ�\]YX]�Z]]Z^�\J	����Y�Y]���U�	���N���Ӌ���[��Y�J���[X[�J_JN��]�SXZ�\�]Z^��\�XZ�\�]Z^��\�
+K�X\
+O��YOOZY�\]Y�
+JN����X��\�J
+_X�]�
+J^�[\�
+K�Y\��Y�J__B��[��[ۈ�[�]Z^�Y
+^���][ۏXܛ�OZ��	��\��[ۏI�YXB��[��[ۈ��T]Z^���J��J^ۘ]�Y�]܋��\��\�˝ܚ]U^
+��JK�[�
+
+OO���ۜ�[Y��[Y[��]Y\�T�[X�܊	����K[Y\��Y�I�N�Y�[
+^�[�^�۝[�I���H��YY��\��\�	��[��\��\��Y
+	ݚ\�X�I�N��][Y[�]
+
+
+OO�[��\��\���[[ݙJ	ݚ\�X�I�K��
+__JK��]�
+
+
+OO�[\�
+]Z^���N�	���_X
+J_B��[��[ۈ��қ�[�ܙX]Y
+J^��[
+]��\��H������[�Y��ȏ��]ۈ�\��H��X�Ȉۘ�X��H��YJ
+H�����YO؝]ۏ�]��\��H�^YX���ȏ�ST�URV��]��O��\��K��[YJ_O�O�]��\��H���[�YX�ۙ�\�H���$�[�H]�H�X��\�ٝ[H��[�YH]Z^���]���\��H�]]Y���Z][���܈H����\�H�\��[ۋ���]��\��H��Z][��Y�ȏ�O��O�O��O�O��O��]���]��
+_B��[��[ۈ���X[�Y�JY
+^��ۜ�O[XZ�\�]Z^��\�
+K��[�
+O��YOOZY
+N�Y�\J\�]\�����X��\�J
+N��ۜ��XYO\K��]\�OOI�X�]�I�K��]\�OOI�]�I���[
+]��\��H�XZ�\�X[�Y�H���]ۈ�\��H��X�Ȉۘ�X��H����X��\�J
+H�����X���^H]Z^��\�؝]ۏ�]��\��H�^YX���ȏ�U�HURV��UT�]��O��\��K��[YJ_O�O�]��\��H�X[�Y�KX��H���[��URV���O��[�����K���_O؏��]ۈ�\��H���KX��H�ۘ�X��H���T]Z^���J	��K���_I�H����H��O؝]ۏ��X[�ܙXYO���\�H\�X�]�H��H�]\�X�\[��Ή�X�]�]H\�]Z^��Y�ܙH�\�[��]���I�O��X[�[HYH���K[Y\��Y�H����H��YY��\��\��[O��]��]��\��H�X[�Y�KYܚY���X�[ۈ�\��H��ܛKX�\�ؘ�KX�\��������Y]����]��\��H�\�X�\[�X��[����XYH�[��ܙXYO�ٛ܈\�X�\[�����[�Ή���HX�]�]Y	�O��[���]���\��H�]]Y��ܙXYO���[����Y]���YHH\�X�\[�ؘ�H[��\�H]Z^��Ή�H�Y�\��]�]H[�[[�HX�]�]H]��O����X�[ۏ��X�[ۈ�\��H��ܛKX�\��������۝�������\��H�]]Y���]\Έ���\��K��]\�	��Y�	�_O؏���ܙXYO��]ۈ�\��H��[X\�H�\�X�]ۈ�ۘ�X��H���][ۏI�ܛ�OZ��	��\��[ۏI�K�YIȏ��[����Y]�؝]ۏ���]ۈ�\��H��[X\�H�\�X�]ۈ�ۘ�X��H��X�T]Z^��]\�	��K�YI�H��X�]�]H]Z^�؝]ۏ�O�]ۈ�\��H��][�H�[�ۘ�X��H����ܙX]J	��K�YI�H��Y]]Z^�؝]ۏ���X�[ۏ��]���X�[ۈ�\��H��ܛKX�\�����]Z^��[[X\�O���]��\��H�]Z^�[Y]H���[���\��K��]Y�ܞ_	�[��]Y�ܚ\�Y	�_O��[���[���K�]Y\�[ۜ˛[��H]Y\�[ۜ���[���[��ܙX]Y�H	�\��K�ܙX]܊_O��[���[���K��]\�	��Y�	�O��[���]����X�[ۏ��]��
+_B��[��[ۈ��[�
+^ڛ�[��ܙY[���ۏ]�YN��[
+]��\��H�^YX���ȏ�(t-t`t.4c�	��\��[۟O�]��O�$�/�`�/�,�.4.�.4`t`�-O��O��$�b�,�-t-4-t`�-H4.4/4-K4`H4.�/�-t`�/�4-4,4`t-H4/�/�.�,4-�,�,4`�-H4,�4.�.�,4`t,4a�.4c�`�,���[�]YH��[YH�X^[��H���X�Z�\�H�$�,4b4-t`�/�4.4/4-H�]]ٛ��\Ϗ�]ۈ�\��H��[X\�H�ۘ�X��H�қ�[�
+H��$�.�.�c�a�.4`t-H4,�]Z^�t,؝]ۏ�
+_B�\�[���[��[ۈқ�[�
+^��^��ۜ�]OX]�Z]\J	�ڛ�[���Y]�����	���N���Ӌ���[��Y�Jۘ[YN���[Y[��]Y\�T�[X�܊	�ۘ[YI�K��[Y_J_JN�^Y\�YY]K�^Y\�Y���[�ܘY�K��]][J	�[\�\^Y\�I���\��[ۋ^Y\�Y
+N��]OY]K��]Nܙ[�\�^Y\�
+_X�]�
+J^�[\�
+K�Y\��Y�J__B��[��[ۈ�Z][�ћܓ�^
+
+^��X\�[�\��[
+�[��˝X��N��[
+]��\��H��[�\���]��\��H�^YX���ȏ�'�`�,�/�,�/�`4b�`�4-H4-�,4/�.4`t,4/O�]��O�$t.�,4,�/�-4,4`4.4/O�O��\��H�]]Y��&4-�a�,4.�,4.t`�-H4,�`4-t/4-t`�/�4-�,4,�b�/�`4/�`t,4-4,4.4-�`�-ta�-K����]��
+_B��[��[ۈ^Y\�]Y\�[ۊ
+^�Y��X�Z]Y]Y\�[ۏOO\�]K�]Y\�[۟�]K�^P[���\�\�]\���Z][�ћܓ�^
+
+N��[X�Y][�Y�[�Y��ۜ�O\�]K�]Y\�[ۑ]K��O\�]K��\��O��K��]Y�ܞKK�^K�[���\��N�[��\�]Y\�[ۜ��K�Y_�K��]Y�ܞKK�^K�[���\��N��ۜ�\�]K�^Y\�˙�[�
+O��YOO\^Y\�Y
+N��[
+]��\��H�^YX���ȏ��\����V�J_H0��]Y\�[ۈ	��]K�]Y\�[ۊ�_Hو	��]K��[O�]��]��\��H�[Y\��YH�[Y\������]��]��\��H�[Y\�X�\���HYH��\����O��]�����\����V�WJ_O���]��\��H�[���\�ȏ����V̗K�X\
+
+KJOO��]ۈ�\��H�[���\�	��[X�YOOZO���[X�Y	Ή��H�ۘ�X��H�X��	�_JH������P��	��W_O؏��\��J_O؝]ۏ�
+K���[�	��_O�]���\��H���ܙH��[�\���ܙN����˜��ܙ_O؏�ˏ��
+N��\�[Y\��]K��\�Y]
+N�B��[��[ۈ�\�[Y\��\�Y]
+^��ۜ��Y�[�\�\�Y]]K����
+N��X\�[�\��[
+�[��˝X��N��[��˝X��\�][�\��[
+
+
+OO���ۜ�Y�SX]�X^
+�J]K����
+KX�Y�[�JN��ۜ�[Y\�Y��[Y[��]Y\�T�[X�܊	��[Y\��K�\�Y��[Y[��]Y\�T�[X�܊	�ؘ\��N�Y�[Y\�^�[Y\��^�۝[�JY��L
+K�њ^Y
+JNؘ\���[K��YJY�̌
+J��I�ZY�[Y�
+^��X\�[�\��[
+�[��˝X��N���[Y[��]Y\�T�[X�ܐ[
+	˘[���\��K��ܑXX�
+O��\�X�Y]�YJ__KL
+_B�\�[���[��[ۈX��J^�Y��[X�YOO][�Y�[�Y
+\�]\����[X�YZN��X�Z]Y]Y\�[ۏ\�]K�]Y\�[ێ��Z][�ћܓ�^
+
+N��^��ۜ��X]�Z]\J	��[���\���Y]�����	���N���Ӌ���[��Y�J�^Y\�Y]Y\�[ێ��]K�]Y\�[ۋ[���\��_J_JN��]O\���]N��X\�[�\��[
+�[��˝X��N��Z][�ћܓ�^
+
+_X�]�
+J^��X�Z]Y]Y\�[ۏ[�[��[X�Y][�Y�[�Y�[\�
+K�Y\��Y�J__B��[��[ۈ�\��]�X[[Y\�
+^��ۜ��\�\�]K��\�[��\�Y]]K����
+N��X\�[�\��[
+�[��˝X��N��[��˝X��\�][�\��[
+
+
+OO���ۜ�Y�SX]�X^
+
+�J]K����
+K\�\�
+JN��ۜ�[Y��[Y[��]Y\�T�[X�܊	�ܙ]�X[][Y\��N�Y�[
+Y[�^�۝[�X�^]Y\�[ۈ[�	�Y��L
+K�њ^Y
+J_H�X˘�Y�[Y�
+X�X\�[�\��[
+�[��˝X��_KL
+_B��[��[ۈ[���\��]�X[
+
+^��ۜ�O\�]K�^P[���\��\�]K��]�X[��O\�]K��\��O۝[�[��\�]Y\�[ۜ���]K�]Y\�[ۗK�ۏXO�[�\�[���\�����K��ܜ�X����ܜ�X�	Ή�[��ܜ�X�	�O؏��ӛ�[���\��\��X�ܙY����[
+]��\��H��[�\���]��\��H�^YX���ȏ��\����O˖�_���]Y�ܞJ_H0����[��\�[�]��O��O˘�ܜ�X����ܜ�X�[���\�IΉ��ܜ�X�[���\��O�O���\����O˖�W_��^
+_O���\��H���ܙH����۟O������H�ܜ�X�[���\�\Έ���\����O˖̗V���V��W_���ܜ�X�[���\�_O؏��O˘�ܜ�X��������[�HX\��Y���K�X\��YHˏ؏����O����XY\���\�����XY\��
+_O�\��H�]]Y�YH��]�X[][Y\����^]Y\�[ۈ[�
+��Xˏ���]��
+N��\��]�X[[Y\�
+_B��[��[ۈ�[�\�^Y\�
+^�Y�\�]J\�]\���Y��]K��]OOOI�ؘ�I�\�]\���[
+]��\��H��[�\���O�(t-t`t.4c�	��\��[۟O�O��\��H�]]Y��$�.4-H4`t`�-H4,�.�.�c�a�-t/t.�4&4-�a�,4.�,4.t`�-H4,�/�-4-tbt.4c�4-4,4-�,4/�/�a�/t-K����]��
+N�Y��]K��]OOOI�]Y\�[ۉ�\�]\��^Y\�]Y\�[ۊ
+N�Y��]K��]OOOIܙ\�[��\�]\��[���\��]�X[
+
+N�Y��]K��]OOOIٚ[�\�Y	�\�]\���[
+]��\��H��[�\���]��\��H�^YX���ȏ�)4.4/t,4.��]��O�$t.�,4,�/�-4,4`4.4/4-�,4`�a�,4`t`�.4-t`�/�O�O��XY\��
+_O�]��
+_B��[��[ۈXY\��
+^ܙ]\��]��\��H�XY\���\�����]K�^Y\�˜�X�JL
+K�X\
+
+JOO�]��\��H�XY\����[���J�_K�	�\����[YJ_O��[��������ܙ_Hˏ؏��]��
+K���[�	��_O�]��B�\�[���[��[ۈ��
+��[X[�
+^��]OX]�Z]\J	����	��Y]�����	���N���Ӌ���[��Y�J���[X[�J_JNܙ[�\���
+
+_B��[��[ۈ�[�\���
+
+^��ۜ�\�O\�]K��]OOOI�]Y\�[ۉ��]Y\�[ۈ	��]K�]Y\�[ۊ�_Hو	��]K��[H0��[���\�[YH�[XZ[�[����]K��]OOOIܙ\�[����H�ܜ�X�[���\�\���ۈ�]�\�[ۙH�܈
+��X�ۙ�Μ�]K��]OOOIٚ[�\�Y	���]Z^��[�\�Y	ΉԙXYH��\�	���[
+]��\��H�^YX���ȏ����ӕ���0���T��Sӈ	��\��[۟O�]��O��\�_O�O��\��H�]]Y��\�X�\[�Έ	��]K�^Y\�˛[��H0��[���\�Y�	��]K�[���\�YO����]K�]Y\�[ۑ]O�]��\��H���X�H�����\���]K�]Y\�[ۑ]K��]Y�ܞJ_O؏�8�%	�\���]K�]Y\�[ۑ]K�^
+_O�]�����I��]K��]�X[�]��\��H���X�H�����ܜ�X�[���\��؏�	�\���]K��]�X[��ܜ�X�[���\�_O�]�����O]��\��H���XX�[ۜȏ���]K��]OOOI�ؘ�I����]ۈ�\��H��[X\�H�ۘ�X��H���
+	��\�	�H���\�]Z^�؝]ۏ�Ή��I���]Y\�[ۉ�	ܙ\�[��K�[��Y\��]K��]JO���]ۈ�\��H��\���ۘ�X��H���
+	�[�	�H��[�]Z^�؝]ۏ�Ή��O�]ۈ�\��H��\���ۘ�X��H���
+	ܙ\�]	�H���\�]�\��[ۏ؝]ۏ��]����XY\���\�����XY\��
+_O�\��H�]]Y��\�X�\[����[�]������][ۋ�ܚY�[�K���\��[ۏI��\��[۟O؏���
+_B��[��[ۈ�ۛ�X�[ۑ\��܊
+^��[
+]��\��H��[�\���]��\��H�^YX���ȏ�[\�]Z^��]��O�\�]�H]Z^�[��\���]�Z[X�O�O��\��H�]]Y��H]Z^�X^H]�H�Y[��[[ݙY܈\�\�[��\�[�ˏ��]��\��H���X�H��[\�]Z^��[��[�\�[Hۛ[�K��]\����YH[���[�[�X�]�H]Z^�\�[��]��^YY�]��K��]���]ۈ�\��H��[X\�H�ۘ�X��H���][ۏI��ȏ�����YO؝]ۏ��]��
+_B�\�[���[��[ۈ�Y��\�
+
+^��^��]OX]�Z]\J
+N�Y�^Y\�Y	��\�]K�^Y\�˜��YJO��YOO\^Y\�Y
+J^���[�ܘY�K��[[ݙR][J	�[\�\^Y\�I���\��[ۊN�^Y\�Y[�[��X�Z]Y]Y\�[ۏ[�[��[X�Y][�Y�[�Yڛ�[��ܙY[���ۏY�[�N�\��[�\��^OI��X�ۜ��^OVܛ�_	�^Y\���]K��]K�]K�]Y\�[ۋ�]K��\�Y]�]K��\�[��\�Y]�]K�[���\�Y�]K�^Y\�˛X\
+O��Y
+�Ή����[YJ�Ή�����ܙJK���[�	�	�K�]K�^P[���\�˘[���\�	���]K�^P[���\�˙X\��Y	��K���[�	߉�N�Y��^OOO[\��[�\��^J\�]\���\��[�\��^OZ�^N�Y���OOOI���	�\�[�\���
+
+N�[�HY�^Y\�Y
+\�[�\�^Y\�
+N�[�HY�Z��[��ܙY[���ۊZ��[�
+_X�]�
+J^��ۜ��K�\��܊JN��ۛ�X�[ۑ\��܊
+__B�Y�\��I��\\�[\˙�]
+	��\��[ۉ�JZ�YJ
+N�[�HܙY��\�
+
+N��][�\��[
+�Y��\�ML
+_Bconst app=document.querySelector('#app'); const params=new URLSearchParams(location.search); const role=params.get('role'); let session=params.get('session')||'1', playerId=localStorage.getItem('philips-player-'+session), state, selected, submittedQuestion=null, joinScreenShown=false;
 const api=(path='',opts={})=>{const suffix=path===''&&playerId?'?playerId='+encodeURIComponent(playerId):'';return fetch('/api/sessions/'+session+path+suffix,{headers:{'Content-Type':'application/json'},...opts}).then(async r=>{const x=await r.json();if(!r.ok)throw Error(x.error);return x})};
 const ownerId=localStorage.getItem('philips-owner-id')||crypto.randomUUID(); localStorage.setItem('philips-owner-id',ownerId);
 const quizApi=(path='',opts={})=>fetch('/api/quizzes'+path,{headers:{'Content-Type':'application/json'},...opts}).then(async r=>{const x=await r.json();if(!r.ok)throw Error(x.error);return x});
