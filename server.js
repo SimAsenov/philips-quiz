@@ -1,4 +1,3 @@
-
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -121,7 +120,7 @@ async function api(req, res, pathname) {
   if (action === 'join') {
     if (s.custom && s.status !== 'Active' && s.status !== 'Live') return json(res,{error:'This quiz is not available yet.'},403);
     const name = String(data.name || '').trim().slice(0, 30);
-    if (!name) return json(res,{error:'Въведете име.'},400);
+    if (!name) return json(res,{error:'Please enter your name.'},400);
     const id = Math.random().toString(36).slice(2,10);
     s.players[id] = {id,name,score:0,answers:{}};
     s.custom ? await saveCreated(s) : saveSessions();
@@ -129,7 +128,7 @@ async function api(req, res, pathname) {
   }
   if (action === 'answer') {
     const p = s.players[data.playerId];
-    if (!p || s.state !== 'question' || Number(data.question) !== s.question || p.answers[s.question] !== undefined) return json(res,{error:'Отговорът не може да бъде приет.'},400);
+    if (!p || s.state !== 'question' || Number(data.question) !== s.question || p.answers[s.question] !== undefined) return json(res,{error:'Your answer cannot be accepted.'},400);
     const elapsed = Math.max(0, Date.now() - s.startedAt);
     const quizQuestions = s.custom ? createdQuestions(s) : questions;
     const correct = Number(data.answer) === quizQuestions[s.question].correct;
@@ -146,7 +145,7 @@ async function api(req, res, pathname) {
     s.custom ? await saveCreated(s) : saveSessions();
     return json(res, publicState(s.custom?s:sessions[s.id]));
   }
-  return json(res,{error:'Непозната команда'},400);
+  return json(res,{error:'Unknown command.'},400);
 }
 
 const handler = async (req,res) => {
@@ -166,4 +165,3 @@ if (require.main === module) http.createServer(handler).listen(PORT, '0.0.0.0', 
 });
 
 module.exports = handler;
-
