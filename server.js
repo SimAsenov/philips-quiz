@@ -1,0 +1,120 @@
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const PORT = Number(process.env.PORT || 3000);
+const publicDir = path.join(__dirname, 'public');
+const dataPath = path.join(__dirname, 'quiz-data.json');
+
+const questions = [
+  ['Hair Care', 'Как се нарича новата най-висока серия уреди Philips за грижа за косата?', ['Philips Aqua SenseIQ','Philips MoistureCare Pro','Philips StyleSense Elite','Philips HydroGlow Premium'], 0],
+  ['Hair Care', 'Какъв процент от естествената влага на косата запазва Philips Aqua SenseIQ?', ['85%','90%','95%','99,9%'], 3],
+  ['Lumea', 'До колко години гладка кожа могат да очакват потребителите от новата Lumea Серия 9900 Pro?', ['До 2 години','До 3 години','До 5 години','До 6 месеца'], 2],
+  ['Lumea', 'До какъв процент намаляване на окосмяването могат да очакват потребителите след само 2 сесии?', ['50%','65%','80%','90%'], 2],
+  ['Sonicare', 'Каква допълнителна информация получават потребителите с новата четка Sonicare DiamondClean 9900 Prestige?', ['Насоки в реално време за почистването на различните участъци в устата','Информация за натиска в реално време','Персонализирани насоки за по-добро миене','Всичко отгоре'], 3],
+  ['Sonicare', 'Колко режима на работа има Sonicare DiamondClean 9900 Prestige?', ['5 режима и 3 интензитета','6 режима и 3 интензитета','8 режима и 3 интензитета','10 режима и 3 интензитета'], 2],
+  ['Grooming', 'До каква дължина бръсне електрическата самобръсначка Philips i9000 Prestige Ultra благодарение на системата Lift&Cut?', ['0,08 mm','-0,02 mm','-0,08 mm','0 mm'], 2],
+  ['Grooming', 'Колко режима на работа има електрическата самобръсначка Philips i9000 Prestige Ultra?', ['3 режима','4 режима','5 режима','1 режим'], 2],
+  ['Hair Care', 'Какво е основното предимство на технологията SenseIQ при уредите Philips за грижа за косата?', ['Измерва и адаптира температурата спрямо нуждите на косата','Увеличава максимално температурата за по-бързо оформяне','Работи само с предварително избран режим','Използва един и същ температурен профил за всички типове коса'], 0],
+  ['Lumea', 'Какво помага на потребителите да изберат подходяща настройка при използване на Philips Lumea?', ['Автоматично разпознаване на дължината на косъма','Сензор за тена на кожата и препоръка за интензитет','Измерване на влажността на кожата','Разпознаване на цвета на дрехите'], 1]
+].map(([category, text, answers, correct], id) => ({ id, category, text, answers, correct }));
+
+function newSession(id) { return { id, state: 'lobby', question: 0, startedAt: null, resultsStartedAt: null, players: {} }; }
+function loadSessions() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+    return Object.fromEntries([1,2,3].map(id => [id, saved[id] || newSession(id)]));
+  } catch (_) { return Object.fromEntries([1,2,3].map(id => [id, newSession(id)])); }
+}
+let sessions = loadSessions();
+function saveSessions() {
+  if (process.env.VERCEL) return;
+  fs.writeFileSync(dataPath, JSON.stringify(sessions, null, 2), 'utf8');
+}
+function advanceIfNeeded(s) {
+  const now = Date.now(); let changed = false;
+  if (s.state === 'question' && !s.startedAt) { s.startedAt = now; changed = true; }
+  if (s.state === 'question' && now - s.startedAt >= 20000) {
+    s.state = 'results'; s.resultsStartedAt = now; changed = true;
+  }
+  if (s.state === 'results' && !s.resultsStartedAt) { s.resultsStartedAt = now; changed = true; }
+  if (s.state === 'results' && now - s.resultsStartedAt >= 10000) {
+    if (s.question < questions.length - 1) {
+      s.question += 1; s.state = 'question'; s.startedAt = now; s.resultsStartedAt = null;
+    } else { s.state = 'finished'; }
+    changed = true;
+  }
+  if (changed) saveSessions();
+}
+function leaderBoard(s) { return Object.values(s.players).map(({id,name,score}) => ({id,name,score})).sort((a,b) => b.score - a.score || a.name.localeCompare(b.name, 'bg')); }
+function publicState(s, playerId) {
+  const q = questions[s.question];
+  const answer = playerId && s.players[playerId] ? s.players[playerId].answers[s.question] : null;
+  return {
+    id:s.id, state:s.state, question:s.question, total:questions.length, startedAt:s.startedAt, resultsStartedAt:s.resultsStartedAt,
+    questionData: s.state === 'question' ? redactQuestion(q) : null,
+    reveal: s.state === 'results' || s.state === 'finished' ? {category:q.category, text:q.text, correctAnswer:q.answers[q.correct]} : null,
+    myAnswer: answer || null, players: leaderBoard(s), answered: Object.values(s.players).filter(p => p.answers[s.question] !== undefined).length
+  };
+}
+function redactQuestion(q) { return { id:q.id, category:q.category, text:q.text, answers:q.answers }; }
+function json(res, value, code=200) { res.writeHead(code, {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}); res.end(JSON.stringify(value)); }
+function body(req) { return new Promise((resolve,reject) => { let d=''; req.on('data', c => d += c); req.on('end', () => { try {resolve(d ? JSON.parse(d) : {});} catch(e){reject(e);} }); }); }
+
+async function api(req, res, pathname) {
+  const match = pathname.match(/^\/api\/sessions\/(\d+)(?:\/(.+))?$/);
+  if (!match || !sessions[match[1]]) return json(res,{error:'Невалидна сесия'},404);
+  const s = sessions[match[1]], action = match[2] || '';
+  advanceIfNeeded(s);
+  if (req.method === 'GET') {
+    const playerId = new URL(req.url, `http://${req.headers.host}`).searchParams.get('playerId');
+    return json(res, publicState(s, playerId));
+  }
+  const data = await body(req);
+  if (action === 'join') {
+    const name = String(data.name || '').trim().slice(0, 30);
+    if (!name) return json(res,{error:'Въведете име.'},400);
+    const id = Math.random().toString(36).slice(2,10);
+    s.players[id] = {id,name,score:0,answers:{}};
+    saveSessions();
+    return json(res,{playerId:id, state:publicState(s, id)});
+  }
+  if (action === 'answer') {
+    const p = s.players[data.playerId];
+    if (!p || s.state !== 'question' || Number(data.question) !== s.question || p.answers[s.question] !== undefined) return json(res,{error:'Отговорът не може да бъде приет.'},400);
+    const elapsed = Math.max(0, Date.now() - s.startedAt);
+    const correct = Number(data.answer) === questions[s.question].correct;
+    const speed = Math.max(0, Math.round((20000 - elapsed) / 20));
+    const earned = correct ? 1000 + speed : 0;
+    p.answers[s.question] = {answer:Number(data.answer), correct, earned}; p.score += earned;
+    saveSessions();
+    return json(res,{correct, earned, state:publicState(s, data.playerId)});
+  }
+  if (action === 'host') {
+    if (data.command === 'start') { s.state='question'; s.startedAt=Date.now(); s.resultsStartedAt=null; }
+    if (data.command === 'reset') sessions[s.id] = newSession(s.id);
+    saveSessions();
+    return json(res, publicState(sessions[s.id]));
+  }
+  return json(res,{error:'Непозната команда'},400);
+}
+
+const handler = async (req,res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  try {
+    if (url.pathname.startsWith('/api/')) return await api(req,res,url.pathname);
+    const file = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\//,'');
+    const full = path.normalize(path.join(publicDir,file));
+    if (!full.startsWith(publicDir) || !fs.existsSync(full)) { res.writeHead(404); return res.end('Not found'); }
+    const type = full.endsWith('.html')?'text/html; charset=utf-8':full.endsWith('.css')?'text/css':full.endsWith('.js')?'application/javascript':'application/octet-stream';
+    res.writeHead(200,{'Content-Type':type}); fs.createReadStream(full).pipe(res);
+  } catch(e) { json(res,{error:e.message},500); }
+};
+if (require.main === module) http.createServer(handler).listen(PORT, '0.0.0.0', () => {
+  const ips = Object.values(os.networkInterfaces()).flat().filter(x=>x && x.family==='IPv4' && !x.internal).map(x=>x.address);
+  console.log(`Philips Quiz: http://localhost:${PORT}`); ips.forEach(ip=>console.log(`Споделете: http://${ip}:${PORT}`));
+});
+
+module.exports = handler;
+
