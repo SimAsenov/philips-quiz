@@ -39,7 +39,7 @@ function advanceIfNeeded(s) {
     s.state = 'results'; s.resultsStartedAt = now; changed = true;
   }
   if (s.state === 'results' && !s.resultsStartedAt) { s.resultsStartedAt = now; changed = true; }
-  if (s.state === 'results' && now - s.resultsStartedAt >= 10000) {
+  if (s.state === 'results' && now - s.resultsStartedAt >= 7000) {
     if (s.question < questions.length - 1) {
       s.question += 1; s.state = 'question'; s.startedAt = now; s.resultsStartedAt = null;
     } else { s.state = 'finished'; }
@@ -93,6 +93,7 @@ async function api(req, res, pathname) {
   }
   if (action === 'host') {
     if (data.command === 'start') { s.state='question'; s.startedAt=Date.now(); s.resultsStartedAt=null; }
+    if (data.command === 'end') { s.state='finished'; s.resultsStartedAt=Date.now(); }
     if (data.command === 'reset') sessions[s.id] = newSession(s.id);
     saveSessions();
     return json(res, publicState(sessions[s.id]));
