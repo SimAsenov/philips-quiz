@@ -74,7 +74,7 @@ function publicState(s, playerId) {
   const q = quizQuestions[s.question];
   const answer = playerId && s.players[playerId] ? s.players[playerId].answers[s.question] : null;
   return {
-    id:s.id, title:s.custom?s.quiz.name:`Session ${s.id}`, status:s.status || (s.state==='lobby'?'Active':s.state==='question'?'Live':s.state==='finished'?'Finished':'Active'), state:s.state, question:s.question, total:quizQuestions.length, startedAt:s.startedAt, resultsStartedAt:s.resultsStartedAt,
+    id:s.id, custom:!!s.custom, title:s.custom?s.quiz.name:`Session ${s.id}`, status:s.status || (s.state==='lobby'?'Active':s.state==='question'?'Live':s.state==='finished'?'Finished':'Active'), state:s.state, question:s.question, total:quizQuestions.length, startedAt:s.startedAt, resultsStartedAt:s.resultsStartedAt,
     questionData: s.state === 'question' ? redactQuestion(q) : null,
     reveal: s.state === 'results' || s.state === 'finished' ? {category:q.category, text:q.text, correctAnswer:q.answers[q.correct]} : null,
     myAnswer: answer || null, players: leaderBoard(s), answered: Object.values(s.players).filter(p => p.answers[s.question] !== undefined).length
