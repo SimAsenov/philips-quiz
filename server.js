@@ -141,7 +141,7 @@ async function api(req, res, pathname) {
   if (action === 'host') {
     if (data.command === 'start') { s.state='question'; s.status='Live'; s.startedAt=Date.now(); s.resultsStartedAt=null; }
     if (data.command === 'end') { s.state='finished'; s.status='Finished'; s.resultsStartedAt=Date.now(); }
-    if (data.command === 'reset' && !s.custom) sessions[s.id] = newSession(s.id);
+    if (data.command === 'reset') { if (s.custom) { s.state='lobby'; s.status='Active'; s.question=0; s.startedAt=null; s.resultsStartedAt=null; s.players={}; } else { sessions[s.id] = newSession(s.id); } }
     s.custom ? await saveCreated(s) : saveSessions();
     return json(res, publicState(s.custom?s:sessions[s.id]));
   }
