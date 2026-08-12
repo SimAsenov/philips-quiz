@@ -1,6 +1,4 @@
-Exit code: 0
-Wall time: 0.3 seconds
-Output:
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
