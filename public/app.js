@@ -1,73 +1,27 @@
-const app = document.getElementById('app');
-
-function escapeHtml(value) {
-  return String(value || '').replace(/[&<>]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[char]));
-}
-
-function layout(content) {
-  app.innerHTML = '<section class="shell"><header class="top"><img class="logo" src="/assets/philips-logo.png" alt="Philips"><span class="pill"><i></i> LIVE QUIZ</span></header><main class="content">' + content + '</main></section>';
-}
-
-function home() {
-  layout('<div class="home"><section class="hero"><div class="eyebrow">PHILIPS LEARNING EXPERIENCES</div><h1>Philips Quiz Maker</h1><p class="hero-copy">Create, manage and run live Philips quizzes for trainings, sales events and product knowledge sessions.</p><div class="hero-actions"><button class="primary" id="create">Create Quiz</button><button class="outline" id="join">Join Quiz</button><button class="text-action" id="library">All Quizzes <span>→</span></button></div><div class="hero-stat"><b>20 sec.</b><span>per question</span><b>1,000 pts.</b><span>for a correct answer</span></div></section></div>');
-  document.getElementById('create').onclick = createQuiz;
-  document.getElementById('join').onclick = joinQuiz;
-  document.getElementById('library').onclick = library;
-}
-
-function createQuiz() {
-  layout('<div class="maker"><button class="back" id="back">← Back to Home</button><div class="eyebrow">NEW QUIZ</div><h1>Create a Quiz</h1><section class="form-card"><label>Quiz name<input id="quiz-name" placeholder="e.g. Sonicare product knowledge"></label><label>Category<input id="quiz-category" placeholder="e.g. Oral Health Care"></label><label>Creator name<input id="quiz-creator" placeholder="Your name"></label><label>Question text<textarea id="question" placeholder="Type your question"></textarea></label><label>Answer option 1<input id="answer-a" placeholder="Answer option 1"></label><label>Answer option 2<input id="answer-b" placeholder="Answer option 2"></label><p class="muted">The first answer is marked as correct for this recovery version.</p></section><div class="maker-actions"><button class="outline" id="cancel">Cancel</button><button class="primary" id="save">Save Quiz</button></div></div>');
-  document.getElementById('back').onclick = home;
-  document.getElementById('cancel').onclick = home;
-  document.getElementById('save').onclick = saveQuiz;
-}
-
-async function saveQuiz() {
-  const name = document.getElementById('quiz-name').value.trim();
-  const creator = document.getElementById('quiz-creator').value.trim();
-  const text = document.getElementById('question').value.trim();
-  const a = document.getElementById('answer-a').value.trim();
-  const b = document.getElementById('answer-b').value.trim();
-  if (!name || !creator || !text || !a || !b) return alert('Please complete every field.');
-  const quiz = {id: crypto.randomUUID(), name, creator, category: document.getElementById('quiz-category').value.trim() || 'General', question: text, answers: [a,b], code: String(Math.floor(100000 + Math.random() * 900000)), status: 'Draft'};
-  localStorage.setItem('philips-recovery-quizzes', JSON.stringify([quiz, ...getQuizzes()]));
-  library();
-}
-
-function getQuizzes() {
-  try { return JSON.parse(localStorage.getItem('philips-recovery-quizzes') || '[]'); } catch (_) { return []; }
-}
-
-function library() {
-  const quizzes = getQuizzes();
-  const cards = quizzes.length ? quizzes.map(quiz => '<article class="quiz-library-card"><div class="card-status ' + quiz.status.toLowerCase() + '"><i></i>' + quiz.status + '</div><h2>' + escapeHtml(quiz.name) + '</h2><p>' + escapeHtml(quiz.category) + '</p><div class="quiz-meta"><span>1 question</span><span>Code: <b>' + quiz.code + '</b></span></div><div class="card-actions"><button class="primary small" data-host="' + quiz.id + '">Open Host View</button></div></article>').join('') : '<div class="empty-state"><b>No Quizzes Yet</b><p>Create your first Philips Quiz.</p></div>';
-  layout('<div class="maker library"><button class="back" id="back">← Home</button><div class="library-head"><div><div class="eyebrow">MY QUIZZES</div><h1>All Quizzes</h1></div><button class="primary compact" id="create">+ Create Quiz</button></div><div class="quiz-library">' + cards + '</div></div>');
-  document.getElementById('back').onclick = home;
-  document.getElementById('create').onclick = createQuiz;
-  document.querySelectorAll('[data-host]').forEach(button => button.onclick = () => hostView(button.dataset.host));
-}
-
-function hostView(id) {
-  const quiz = getQuizzes().find(item => item.id === id);
-  if (!quiz) return library();
-  layout('<div class="maker manage"><button class="back" id="back">← Back to My Quizzes</button><div class="eyebrow">HOST VIEW</div><h1>' + escapeHtml(quiz.name) + '</h1><div class="manage-code"><span>QUIZ CODE</span><b>' + quiz.code + '</b><small>Share this code with participants</small></div><section class="form-card lobby-card"><h2>Live Lobby</h2><div class="participant-count">0 <span>connected participants</span></div><p class="muted">Participants can join using the quiz code.</p></section><div class="host-actions"><button class="primary start-button" id="start">Start Quiz</button></div></div>');
-  document.getElementById('back').onclick = library;
-  document.getElementById('start').onclick = () => hostQuestion(quiz);
-}
-
-function hostQuestion(quiz) {
-  layout('<div class="center"><div class="eyebrow">HOST VIEW · QUESTION 1 OF 1</div><div class="timer">20.0</div><h2>' + escapeHtml(quiz.question) + '</h2><div class="answers"><div class="answer"><b>A</b>' + escapeHtml(quiz.answers[0]) + '</div><div class="answer"><b>B</b>' + escapeHtml(quiz.answers[1]) + '</div></div><p class="muted">Only participants can submit an answer.</p></div>');
-}
-
-function joinQuiz() {
-  layout('<div class="flow join-flow"><button class="back" id="back">← Home</button><div class="eyebrow">FOR PARTICIPANTS</div><h1>Join a Quiz</h1><p class="muted">Enter the six-digit code shared by the host.</p><input id="code" inputmode="numeric" maxlength="6" placeholder="000000"><button class="primary" id="continue">Continue</button></div>');
-  document.getElementById('back').onclick = home;
-  document.getElementById('continue').onclick = () => {
-    const quiz = getQuizzes().find(item => item.code === document.getElementById('code').value.trim());
-    if (!quiz) return alert('Invalid quiz code.');
-    layout('<div class="center"><div class="eyebrow">PHILIPS QUIZ</div><h1>' + escapeHtml(quiz.name) + '</h1><p class="muted">You have successfully joined the quiz. Waiting for the host to start.</p></div>');
-  };
-}
-
-home();
-
+const app=document.getElementById('app');
+const params=new URLSearchParams(location.search);
+const role=params.get('role');
+const session=params.get('session');
+let playerId=session&&localStorage.getItem('philips-player-'+session);
+let liveState=null;
+let poller=null;
+let timer=null;
+const owner=localStorage.getItem('philips-owner')||crypto.randomUUID();
+localStorage.setItem('philips-owner',owner);
+const esc=s=>String(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function shell(html){app.innerHTML='<section class="shell"><header class="top"><img class="logo" src="/assets/philips-logo.png" alt="Philips"><span class="pill"><i></i> LIVE QUIZ</span></header><main class="content">'+html+'</main></section>';}
+async function request(url,options){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...options});const body=await r.json();if(!r.ok)throw Error(body.error||'Something went wrong.');return body;}
+function stop(){clearInterval(poller);clearInterval(timer);}
+function home(){stop();shell('<div class="home"><section class="hero"><div class="eyebrow">PHILIPS LEARNING EXPERIENCES</div><h1>Philips Quiz Maker</h1><p class="hero-copy">Create, manage and run live Philips quizzes online.</p><div class="hero-actions"><button class="primary" id="create">Create Quiz</button><button class="outline" id="join">Join Quiz</button><button class="text-action" id="all">All Quizzes →</button></div><div class="hero-stat"><b>20 sec.</b><span>per question</span><b>1,000 pts.</b><span>for a correct answer</span></div></section></div>');document.getElementById('create').onclick=create;document.getElementById('join').onclick=joinCode;document.getElementById('all').onclick=library;}
+function create(){shell('<div class="maker"><button class="back" id="back">← Back to Home</button><div class="eyebrow">NEW QUIZ</div><h1>Create a Quiz</h1><section class="form-card"><label>Quiz name<input id="name" placeholder="e.g. Product knowledge"></label><label>Category<input id="category" placeholder="e.g. Oral Health Care"></label><label>Creator name<input id="creator" placeholder="Your name"></label><label>Question text<textarea id="question" placeholder="Type your question"></textarea></label><label>Answer option 1<input id="a" placeholder="Answer option 1"></label><label>Answer option 2<input id="b" placeholder="Answer option 2"></label><p class="muted">Answer option 1 is the correct answer.</p></section><div class="maker-actions"><button class="outline" id="cancel">Cancel</button><button class="primary" id="save">Save Quiz</button></div></div>');document.getElementById('back').onclick=home;document.getElementById('cancel').onclick=home;document.getElementById('save').onclick=save;}
+async function save(){try{const name=document.getElementById('name').value.trim(),creator=document.getElementById('creator').value.trim(),text=document.getElementById('question').value.trim(),a=document.getElementById('a').value.trim(),b=document.getElementById('b').value.trim();if(!name||!creator||!text||!a||!b)return alert('Please complete every field.');await request('/api/quizzes',{method:'POST',body:JSON.stringify({owner,name,creator,category:document.getElementById('category').value.trim()||'General',questions:[{text,answers:[a,b],correct:0}]})});library();}catch(e){alert(e.message);}}
+async function library(){try{stop();const quizzes=await request('/api/quizzes?owner='+encodeURIComponent(owner));const cards=quizzes.length?quizzes.map(q=>'<article class="quiz-library-card"><div class="card-status '+q.status.toLowerCase()+'"><i></i>'+q.status+'</div><h2>'+esc(q.name)+'</h2><div class="quiz-meta"><span>'+esc(q.category)+'</span><span>'+q.questions.length+' question</span><span>Code: <b>'+q.code+'</b></span></div><div class="card-actions"><button class="small" data-activate="'+q.id+'">'+(q.status==='Draft'||q.status==='Inactive'?'Activate':'Deactivate')+'</button><button class="primary small" data-host="'+q.id+'">Open Host View</button></div></article>').join(''):'<div class="empty-state"><b>No Quizzes Yet</b><p>Create your first Philips Quiz.</p></div>';shell('<div class="maker library"><button class="back" id="back">← Home</button><div class="library-head"><h1>All Quizzes</h1><button class="primary compact" id="create">+ Create Quiz</button></div><div class="quiz-library">'+cards+'</div></div>');document.getElementById('back').onclick=home;document.getElementById('create').onclick=create;document.querySelectorAll('[data-activate]').forEach(x=>x.onclick=async()=>{await request('/api/quizzes/'+x.dataset.activate,{method:'PATCH',body:JSON.stringify({command:x.textContent==='Activate'?'activate':'deactivate'})});library();});document.querySelectorAll('[data-host]').forEach(x=>x.onclick=()=>location='?role=host&session='+x.dataset.host);}catch(e){alert(e.message);}}
+function joinCode(){shell('<div class="flow join-flow"><button class="back" id="back">← Home</button><div class="eyebrow">FOR PARTICIPANTS</div><h1>Join a Quiz</h1><p class="muted">Enter the six-digit code shared by the host.</p><input id="code" inputmode="numeric" maxlength="6" placeholder="000000"><button class="primary" id="continue">Continue</button></div>');document.getElementById('back').onclick=home;document.getElementById('continue').onclick=async()=>{try{const q=await request('/api/quizzes/code/'+document.getElementById('code').value.trim());location='?session='+q.id;}catch(e){alert(e.message);}};}
+function join(){shell('<div class="flow join-flow"><div class="eyebrow">PHILIPS QUIZ</div><h1>Ready to join?</h1><input id="participant" placeholder="Your name"><button class="primary" id="enter">Join Quiz</button></div>');document.getElementById('enter').onclick=async()=>{try{const r=await request('/api/sessions/'+session+'/join',{method:'POST',body:JSON.stringify({name:document.getElementById('participant').value})});playerId=r.playerId;localStorage.setItem('philips-player-'+session,playerId);liveState=r.state;player();startPoll();}catch(e){alert(e.message);}};}
+function startPoll(){clearInterval(poller);poller=setInterval(refresh,1000);}
+async function refresh(){try{const suffix=playerId?'?playerId='+encodeURIComponent(playerId):'';liveState=await request('/api/sessions/'+session+suffix);if(role==='host')host();else if(playerId)player();}catch(e){stop();shell('<div class="center"><h1>This quiz link is not available</h1><button class="primary" id="home">Go to Home</button></div>');document.getElementById('home').onclick=home;}}
+async function command(cmd){liveState=await request('/api/sessions/'+session+'/host',{method:'POST',body:JSON.stringify({command:cmd})});host();}
+function host(){const s=liveState;const names=s.players.length?s.players.map(p=>'<div class="leader"><span>'+esc(p.name)+'</span><b>Joined</b></div>').join(''):'<p class="muted">No Participants Yet. Share the quiz code to invite participants.</p>';const q=s.questionData?'<section class="form-card"><div class="eyebrow">'+esc(s.questionData.category)+'</div><h2>'+esc(s.questionData.text)+'</h2><div class="answers">'+s.questionData.answers.map((a,i)=>'<div class="answer"><b>'+'ABCD'[i]+'</b>'+esc(a)+'</div>').join('')+'</div><p class="muted">Only participants can submit an answer.</p></section>':'';const button=s.state==='lobby'?'<button class="primary start-button" id="start">Start Quiz</button>':s.state==='finished'?'<button class="outline" id="home">Back to Home</button>':'<button class="warn" id="end">End Quiz</button>';shell('<div class="maker manage"><div class="eyebrow">HOST VIEW · '+esc(s.title)+'</div><h1>'+({lobby:'Live Lobby',question:'Live Question',results:'Answer Reveal',finished:'Quiz Finished'}[s.state])+'</h1><div class="manage-code"><span>QUIZ CODE</span><b>'+esc(s.status==='Live'?'LIVE':s.id)+'</b><small>Connected participants: '+s.players.length+'</small></div><section class="form-card lobby-card"><h2>Participants</h2><div class="leaderboard">'+names+'</div></section>'+q+'<div class="host-actions">'+button+'</div></div>');const start=document.getElementById('start');if(start)start.onclick=()=>command('start');const end=document.getElementById('end');if(end)end.onclick=()=>command('end');const back=document.getElementById('home');if(back)back.onclick=home;}
+function player(){const s=liveState;if(s.state==='lobby'){shell('<div class="center"><h1>'+esc(s.title)+'</h1><p class="muted">You have successfully joined the quiz. Waiting for the host to start.</p></div>');return;}if(s.state==='question'){const q=s.questionData;const left=Math.max(0,Math.ceil((20000-(Date.now()-s.startedAt))/1000));shell('<div class="center"><div class="eyebrow">Question '+(s.question+1)+' of '+s.total+'</div><div class="timer" id="timer">'+left+'</div><h2>'+esc(q.text)+'</h2><div class="answers">'+q.answers.map((a,i)=>'<button class="answer" data-answer="'+i+'"><b>'+'ABCD'[i]+'</b>'+esc(a)+'</button>').join('')+'</div></div>');document.querySelectorAll('[data-answer]').forEach(x=>x.onclick=()=>answer(Number(x.dataset.answer)));return;}if(s.state==='results'){shell('<div class="center"><h1>Correct answer</h1><p>'+esc(s.reveal.correctAnswer)+'</p><p class="muted">Next question shortly.</p></div>');return;}shell('<div class="center"><h1>Quiz Finished</h1><div class="leaderboard">'+s.players.slice(0,10).map((p,i)=>'<div class="leader"><span>'+(i+1)+'. '+esc(p.name)+'</span><b>'+p.score+' pts.</b></div>').join('')+'</div></div>');}
+async function answer(index){try{await request('/api/sessions/'+session+'/answer',{method:'POST',body:JSON.stringify({playerId,question:liveState.question,answer:index})});document.querySelectorAll('[data-answer]').forEach(x=>x.disabled=true);}catch(e){alert(e.message);}}
+if(session){refresh();startPoll();}else home();
