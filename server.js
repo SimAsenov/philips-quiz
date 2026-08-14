@@ -132,8 +132,8 @@ async function api(req, res, pathname) {
     const elapsed = Math.max(0, Date.now() - s.startedAt);
     const quizQuestions = s.custom ? createdQuestions(s) : questions;
     const correct = Number(data.answer) === quizQuestions[s.question].correct;
-    const speed = Math.max(0, Math.round((20000 - elapsed) / 20));
-    const earned = correct ? Math.max(0, Math.round(1000 * (1 - elapsed / 20000))) : 0;
+    const speedBonus = Math.max(0, Math.round(1000 * (1 - elapsed / 20000)));
+    const earned = correct ? 1000 + speedBonus : 0;
     p.answers[s.question] = {answer:Number(data.answer), correct, earned}; p.score += earned;
     s.custom ? await saveCreated(s) : saveSessions();
     return json(res,{correct, earned, state:publicState(s, data.playerId)});
