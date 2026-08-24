@@ -36,6 +36,9 @@ const redisSet = (key, value) => redis('SET', key, JSON.stringify(value));
 const createdKey = id => `philips-quiz:created:${id}`;
 const codeKey = code => `philips-quiz:code:${code}`;
 const ownerKey = owner => `philips-quiz:owner:${owner}`;
+const allQuizzesKey = 'philips-quiz:all';
+const legacyQuizIds = ['q_67cy33zty'];
+const allCreatedIds = async () => [...new Set([...(await redisGet(allQuizzesKey) || []), ...legacyQuizIds])];
 const createdQuestions = s => s.quiz.questions.map((q,id)=>({id,category:s.quiz.category||'General',text:q.text,answers:q.answers,correct:Number(q.correct)||0}));
 async function saveCreated(s) { await redisSet(createdKey(s.id), s); }
 async function getCreated(id) { const s = await redisGet(createdKey(id)); if (s) s.custom=true; return s; }
@@ -88,7 +91,7 @@ async function api(req, res, pathname) {
   // Quiz maker records: a shared index per creator plus a 6-digit lookup key.
   if (pathname === '/api/quizzes' && req.method === 'GET') {
     const owner = new URL(req.url, `http://${req.headers.host}`).searchParams.get('owner');
-    const ids = owner ? (await redisGet(ownerKey(owner)) || []) : [];
+    const ids = owner ? (await redisGet(ownerKey(owner)) || []) : await allCreatedIds();
     const items = (await Promise.all(ids.map(getCreated))).filter(Boolean).map(s => ({...s.quiz,id:s.id,code:s.code,status:s.status,createdAt:s.quiz.createdAt}));
     return json(res, items);
   }
@@ -98,7 +101,7 @@ async function api(req, res, pathname) {
     let code; do { code=String(Math.floor(100000+Math.random()*900000)); } while (await redis('EXISTS',codeKey(code)));
     const id=`q_${Math.random().toString(36).slice(2,11)}`;
     const s={id,custom:true,code,status:'Draft',state:'lobby',question:0,startedAt:null,resultsStartedAt:null,players:{},owner,quiz:{...quiz,createdAt:quiz.createdAt||new Date().toISOString()}};
-    await saveCreated(s); await redisSet(codeKey(code),id); const ids=await redisGet(ownerKey(owner))||[]; await redisSet(ownerKey(owner),[id,...ids]);
+    await saveCreated(s); await redisSet(codeKey(code),id); const ids=await redisGet(ownerKey(owner))||[]; await redisSet(ownerKey(owner),[id,...ids]); const allIds=await redisGet(allQuizzesKey)||[]; await redisSet(allQuizzesKey,[id,...allIds.filter(existing=>existing!==id)]);
     return json(res,{...s.quiz,id,code,status:s.status});
   }
   const codeMatch = pathname.match(/^\/api\/quizzes\/code\/(\d{6})$/);
