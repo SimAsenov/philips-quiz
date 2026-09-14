@@ -33,10 +33,31 @@ async function redis(...command) {
 }
 const redisGet = async key => { const value = await redis('GET', key); return value ? JSON.parse(value) : null; };
 const redisSet = (key, value) => redis('SET', key, JSON.stringify(value));
+const redisEval = (script, keys, args = []) => redis('EVAL', script, keys.length, ...keys, ...args);
 const createdKey = id => `philips-quiz:created:${id}`;
 const codeKey = code => `philips-quiz:code:${code}`;
 const ownerKey = owner => `philips-quiz:owner:${owner}`;
 const createdQuestions = s => s.quiz.questions.map((q,id)=>({id,category:s.quiz.category||'General',text:q.text,answers:q.answers,correct:Number(q.correct)||0}));
+
+// Custom quiz responses use an atomic Redis script. This prevents two
+// concurrent requests from recording the same player's answer twice.
+async function recordCreatedAnswer(session, data) {
+  const question = Number(data.question);
+  const answer = Number(data.answer);
+  const quizQuestion = createdQuestions(session)[question];
+  if (!Number.isInteger(question) || !quizQuestion || !Number.isInteger(answer) || answer < 0 || answer >= quizQuestion.answers.length) return {error:'Your answer cannot be accepted.'};
+  const script = "local raw=redis.call('GET',KEYS[1]) " +
+    "if not raw then return cjson.encode({error='Invalid session'}) end " +
+    "local s=cjson.decode(raw) local p=s.players[ARGV[1]] local question=tonumber(ARGV[2]) local now=tonumber(ARGV[3]) local answer=tonumber(ARGV[4]) local correctAnswer=tonumber(ARGV[5]) " +
+    "if not p or s.state~='question' or question~=s.question then return cjson.encode({error='Your answer cannot be accepted.'}) end " +
+    "if not s.startedAt then s.startedAt=now end " +
+    "if now-s.startedAt>=20000 then s.state='results' s.resultsStartedAt=now redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode({error='Your answer cannot be accepted.'}) end " +
+    "p.answers=p.answers or {} local key=tostring(question) local previous=p.answers[key] " +
+    "if previous then return cjson.encode({correct=previous.correct,earned=previous.earned,alreadyAnswered=true}) end " +
+    "local elapsed=math.max(0,now-s.startedAt) local correct=answer==correctAnswer local earned=0 if correct then earned=math.max(0,math.floor(1000*(1-elapsed/20000)+0.5)) end " +
+    "p.answers[key]={answer=answer,correct=correct,earned=earned} p.score=(p.score or 0)+earned redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode({correct=correct,earned=earned})";
+  return JSON.parse(await redisEval(script, [createdKey(session.id)], [String(data.playerId || ''), String(question), String(Date.now()), String(answer), String(quizQuestion.correct)]));
+}
 async function saveCreated(s) { await redisSet(createdKey(s.id), s); }
 async function getCreated(id) { const s = await redisGet(createdKey(id)); if (s) s.custom=true; return s; }
 
@@ -76,7 +97,7 @@ function publicState(s, playerId) {
   return {
     id:s.id, code:s.custom?s.code:null, custom:!!s.custom, title:s.custom?s.quiz.name:`Session ${s.id}`, status:s.status || (s.state==='lobby'?'Active':s.state==='question'?'Live':s.state==='finished'?'Finished':'Active'), state:s.state, question:s.question, total:quizQuestions.length, startedAt:s.startedAt, resultsStartedAt:s.resultsStartedAt,
     questionData: s.state === 'question' ? redactQuestion(q) : null,
-    reveal: s.state === 'results' || s.state === 'finished' ? {category:q.category, text:q.text, correctAnswer:q.answers[q.correct]} : null,
+    reveal: s.state === 'results' || s.state === 'finished' ? {category:q.category, text:q.text, answers:q.answers, correct:q.correct, correctAnswer:q.answers[q.correct]} : null,
     myAnswer: answer || null, players: leaderBoard(s), answered: Object.values(s.players).filter(p => p.answers[s.question] !== undefined).length
   };
 }
@@ -111,6 +132,13 @@ async function api(req, res, pathname) {
   if (!s) s = await getCreated(match[1]);
   if (!s) return json(res,{error:'Invalid session'},404);
   const action = match[2] || '';
+  if (action === 'answer' && s.custom) {
+    const data = await body(req);
+    const result = await recordCreatedAnswer(s, data);
+    const updated = await getCreated(s.id);
+    if (!updated) return json(res,{error:'Invalid session'},404);
+    return json(res,{...result,state:publicState(updated, data.playerId)}, result.error ? 400 : 200);
+  }
   await advanceIfNeeded(s);
   if (req.method === 'GET') {
     const playerId = new URL(req.url, `http://${req.headers.host}`).searchParams.get('playerId');
