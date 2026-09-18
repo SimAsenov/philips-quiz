@@ -75,3 +75,14 @@ test('quoted question content cannot break form attributes', () => {
   const p=page(()=>[]);
   assert.equal(p.run('esc(\'a"<b>\')'), 'a&quot;&lt;b&gt;');
 });
+
+test('delete is persisted and a storage failure is shown in the library', async () => {
+  const p=page((url,opts)=>opts?.method==='PATCH'?{deleted:true}:[], {'philips-created-quizzes':JSON.stringify([quiz])});
+  await p.run("deleteQuiz('q_test')");
+  assert.equal(JSON.parse(p.requests[0].opts.body).command,'delete');
+  assert.equal(JSON.parse(p.values.get('philips-created-quizzes')).length,0);
+  const failed=page(()=>{throw Error('Connection interrupted')}, {'philips-created-quizzes':JSON.stringify([quiz])});
+  await failed.run('showLibrary()');
+  assert.match(failed.app.innerHTML,/Could not refresh your quizzes/);
+  assert.match(failed.app.innerHTML,/Example/);
+});
