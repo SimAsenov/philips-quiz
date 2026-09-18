@@ -58,6 +58,44 @@ async function recordCreatedAnswer(session, data) {
     "p.answers[key]={answer=answer,correct=correct,earned=earned} p.score=(p.score or 0)+earned redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode({correct=correct,earned=earned})";
   return JSON.parse(await redisEval(script, [createdKey(session.id)], [String(data.playerId || ''), String(question), String(Date.now()), String(answer), String(quizQuestion.correct)]));
 }
+// Every custom-quiz mutation (join, answer, host controls and time advances)
+// runs inside Redis. This prevents serverless instances from overwriting one
+// another when many participants act simultaneously.
+async function advanceCreatedStateFor(session) {
+  const script = "local raw=redis.call('GET',KEYS[1]) if not raw then return cjson.encode({error='Invalid session'}) end " +
+    "local s=cjson.decode(raw) local now=tonumber(ARGV[1]) local total=tonumber(ARGV[2]) local changed=false " +
+    "if s.state=='question' and not s.startedAt then s.startedAt=now changed=true end " +
+    "if s.state=='question' and now-tonumber(s.startedAt)>=20000 then s.state='results' s.resultsStartedAt=now changed=true end " +
+    "if s.state=='results' and not s.resultsStartedAt then s.resultsStartedAt=now changed=true end " +
+    "if s.state=='results' and now-tonumber(s.resultsStartedAt)>=7000 then if s.question<total-1 then s.question=s.question+1 s.state='question' s.startedAt=now s.resultsStartedAt=cjson.null else s.state='finished' end changed=true end " +
+    "if changed then redis.call('SET',KEYS[1],cjson.encode(s)) end return cjson.encode(s)";
+  const result = JSON.parse(await redisEval(script, [createdKey(session.id)], [String(Date.now()), String(createdQuestions(session).length)]));
+  if (result.error) return null;
+  result.custom = true;
+  return result;
+}
+async function joinCreated(session, name) {
+  const script = "local raw=redis.call('GET',KEYS[1]) if not raw then return cjson.encode({error='Invalid session'}) end " +
+    "local s=cjson.decode(raw) if s.status~='Active' and s.status~='Live' then return cjson.encode({error='This quiz is not available yet.'}) end " +
+    "local id=ARGV[1] s.players[id]={id=id,name=ARGV[2],score=0,answers={}} redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)";
+  const id = Math.random().toString(36).slice(2,10);
+  const result = JSON.parse(await redisEval(script, [createdKey(session.id)], [id, name]));
+  if (result.error) return result;
+  result.custom = true;
+  return {playerId:id, session:result};
+}
+async function controlCreated(session, command) {
+  const script = "local raw=redis.call('GET',KEYS[1]) if not raw then return cjson.encode({error='Quiz not found.'}) end " +
+    "local s=cjson.decode(raw) local now=tonumber(ARGV[2]) local command=ARGV[1] " +
+    "if command=='start' then s.state='question' s.status='Live' s.startedAt=now s.resultsStartedAt=cjson.null end " +
+    "if command=='end' then s.state='finished' s.status='Finished' s.resultsStartedAt=now end " +
+    "if command=='reset' then s.state='lobby' s.status='Active' s.question=0 s.startedAt=cjson.null s.resultsStartedAt=cjson.null s.players={} end " +
+    "redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)";
+  const result = JSON.parse(await redisEval(script, [createdKey(session.id)], [command, String(Date.now())]));
+  if (result.error) return null;
+  result.custom = true;
+  return result;
+}
 async function saveCreated(s) { await redisSet(createdKey(s.id), s); }
 async function getCreated(id) { const s = await redisGet(createdKey(id)); if (s) s.custom=true; return s; }
 
@@ -132,12 +170,34 @@ async function api(req, res, pathname) {
   if (!s) s = await getCreated(match[1]);
   if (!s) return json(res,{error:'Invalid session'},404);
   const action = match[2] || '';
-  if (action === 'answer' && s.custom) {
+  if (s.custom) {
+    if (action === 'answer') {
+      const data = await body(req);
+      const result = await recordCreatedAnswer(s, data);
+      const updated = await advanceCreatedStateFor(s);
+      if (!updated) return json(res,{error:'Invalid session'},404);
+      return json(res,{...result,state:publicState(updated, data.playerId)}, result.error ? 400 : 200);
+    }
+    if (req.method === 'GET') {
+      const playerId = new URL(req.url, `http://${req.headers.host}`).searchParams.get('playerId');
+      const updated = await advanceCreatedStateFor(s);
+      if (!updated) return json(res,{error:'Invalid session'},404);
+      return json(res, publicState(updated, playerId));
+    }
     const data = await body(req);
-    const result = await recordCreatedAnswer(s, data);
-    const updated = await getCreated(s.id);
-    if (!updated) return json(res,{error:'Invalid session'},404);
-    return json(res,{...result,state:publicState(updated, data.playerId)}, result.error ? 400 : 200);
+    if (action === 'join') {
+      const name = String(data.name || '').trim().slice(0, 30);
+      if (!name) return json(res,{error:'Please enter your name.'},400);
+      const joined = await joinCreated(s, name);
+      if (joined.error) return json(res,joined,403);
+      return json(res,{playerId:joined.playerId,state:publicState(joined.session, joined.playerId)});
+    }
+    if (action === 'host') {
+      const updated = await controlCreated(s, data.command);
+      if (!updated) return json(res,{error:'Quiz not found.'},404);
+      return json(res, publicState(updated));
+    }
+    return json(res,{error:'Unknown command.'},400);
   }
   await advanceIfNeeded(s);
   if (req.method === 'GET') {
