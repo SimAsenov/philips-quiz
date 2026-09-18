@@ -8,16 +8,16 @@ const publicDir = path.join(__dirname, 'public');
 const dataPath = path.join(__dirname, 'quiz-data.json');
 
 const questions = [
-  ['Hair Care', 'Как се нарича новата най-висока серия уреди Philips за грижа за косата?', ['Philips Aqua SenseIQ','Philips MoistureCare Pro','Philips StyleSense Elite','Philips HydroGlow Premium'], 0],
-  ['Hair Care', 'Какъв процент от естествената влага на косата запазва Philips Aqua SenseIQ?', ['85%','90%','95%','99,9%'], 3],
-  ['Lumea', 'До колко години гладка кожа могат да очакват потребителите от новата Lumea Серия 9900 Pro?', ['До 2 години','До 3 години','До 5 години','До 6 месеца'], 2],
-  ['Lumea', 'До какъв процент намаляване на окосмяването могат да очакват потребителите след само 2 сесии?', ['50%','65%','80%','90%'], 2],
-  ['Sonicare', 'Каква допълнителна информация получават потребителите с новата четка Sonicare DiamondClean 9900 Prestige?', ['Насоки в реално време за почистването на различните участъци в устата','Информация за натиска в реално време','Персонализирани насоки за по-добро миене','Всичко отгоре'], 3],
-  ['Sonicare', 'Колко режима на работа има Sonicare DiamondClean 9900 Prestige?', ['5 режима и 3 интензитета','6 режима и 3 интензитета','8 режима и 3 интензитета','10 режима и 3 интензитета'], 2],
-  ['Grooming', 'До каква дължина бръсне електрическата самобръсначка Philips i9000 Prestige Ultra благодарение на системата Lift&Cut?', ['0,08 mm','-0,02 mm','-0,08 mm','0 mm'], 2],
-  ['Grooming', 'Колко режима на работа има електрическата самобръсначка Philips i9000 Prestige Ultra?', ['3 режима','4 режима','5 режима','1 режим'], 2],
-  ['Hair Care', 'Какво е основното предимство на технологията SenseIQ при уредите Philips за грижа за косата?', ['Измерва и адаптира температурата спрямо нуждите на косата','Увеличава максимално температурата за по-бързо оформяне','Работи само с предварително избран режим','Използва един и същ температурен профил за всички типове коса'], 0],
-  ['Lumea', 'Какво помага на потребителите да изберат подходяща настройка при използване на Philips Lumea?', ['Автоматично разпознаване на дължината на косъма','Сензор за тена на кожата и препоръка за интензитет','Измерване на влажността на кожата','Разпознаване на цвета на дрехите'], 1]
+['Hair Care','What is the name of the newest premium Philips hair-care range?',['Philips Aqua SenseIQ','Philips MoistureCare Pro','Philips StyleSense Elite','Philips HydroGlow Premium'],0],
+['Hair Care','What percentage of the hair’s natural moisture does Philips Aqua SenseIQ preserve?',['85%','90%','95%','99.9%'],3],
+['Lumea','How many years of smooth skin can users expect from the Philips Lumea Series 9900 Pro?',['Up to 2 years','Up to 3 years','Up to 5 years','Up to 6 months'],2],
+['Lumea','What hair-reduction result can users expect after only two sessions?',['50%','65%','80%','90%'],2],
+['Sonicare','What additional information does the Sonicare DiamondClean 9900 Prestige provide?',['Real-time guidance for different areas of the mouth','Real-time pressure information','Personalised guidance for better brushing','All of the above'],3],
+['Sonicare','How many cleaning modes does the Sonicare DiamondClean 9900 Prestige have?',['5 modes and 3 intensities','6 modes and 3 intensities','8 modes and 3 intensities','10 modes and 3 intensities'],2],
+['Grooming','How close does the Philips i9000 Prestige Ultra shave with the Lift & Cut system?',['0.08 mm','-0.02 mm','-0.08 mm','0 mm'],2],
+['Grooming','How many operating modes does the Philips i9000 Prestige Ultra have?',['3 modes','4 modes','5 modes','1 mode'],2],
+['Hair Care','What is the main benefit of SenseIQ technology in Philips hair-care appliances?',['It measures and adapts temperature to the hair’s needs','It maximises temperature for faster styling','It works only with a preselected mode','It uses one temperature profile for all hair types'],0],
+['Lumea','What helps users choose a suitable setting when using Philips Lumea?',['Automatic hair-length recognition','A skin-tone sensor and intensity recommendation','Skin-moisture measurement','Clothing-colour recognition'],1]
 ].map(([category, text, answers, correct], id) => ({ id, category, text, answers, correct }));
 
 // Created quizzes are persisted in Upstash.  The small REST wrapper avoids a
@@ -127,7 +127,7 @@ async function advanceIfNeeded(s) {
   }
   if (changed) s.custom ? await saveCreated(s) : saveSessions();
 }
-function leaderBoard(s) { return Object.values(s.players).map(({id,name,score}) => ({id,name,score})).sort((a,b) => b.score - a.score || a.name.localeCompare(b.name, 'bg')); }
+function leaderBoard(s) { return Object.values(s.players).map(({id,name,score}) => ({id,name,score})).sort((a,b) => b.score - a.score || a.name.localeCompare(b.name, 'en')); }
 function publicState(s, playerId) {
   const quizQuestions = s.custom ? createdQuestions(s) : questions;
   const q = quizQuestions[s.question];
@@ -290,7 +290,7 @@ const handler = async (req,res) => {
 };
 if (require.main === module) http.createServer(handler).listen(PORT, '0.0.0.0', () => {
   const ips = Object.values(os.networkInterfaces()).flat().filter(x=>x && x.family==='IPv4' && !x.internal).map(x=>x.address);
-  console.log(`Philips Quiz: http://localhost:${PORT}`); ips.forEach(ip=>console.log(`Споделете: http://${ip}:${PORT}`));
+  console.log(`Philips Quiz: http://localhost:${PORT}`); ips.forEach(ip=>console.log(`Share: http://${ip}:${PORT}`));
 });
 
 module.exports = handler;
