@@ -50,7 +50,7 @@ async function recordCreatedAnswer(session, data) {
     "if not raw then return cjson.encode({error='Invalid session'}) end " +
     "local s=cjson.decode(raw) local p=s.players[ARGV[1]] local question=tonumber(ARGV[2]) local now=tonumber(ARGV[3]) local answer=tonumber(ARGV[4]) local correctAnswer=tonumber(ARGV[5]) " +
     "if not p or s.state~='question' or question~=s.question then return cjson.encode({error='Your answer cannot be accepted.'}) end " +
-    "if not s.startedAt then s.startedAt=now end " +
+    "if (not s.startedAt or s.startedAt==cjson.null) then s.startedAt=now end " +
     "if now-s.startedAt>=20000 then s.state='results' s.resultsStartedAt=now redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode({error='Your answer cannot be accepted.'}) end " +
     "p.answers=p.answers or {} local key=tostring(question) local previous=p.answers[key] " +
     "if previous then return cjson.encode({correct=previous.correct,earned=previous.earned,alreadyAnswered=true}) end " +
@@ -64,11 +64,11 @@ async function recordCreatedAnswer(session, data) {
 async function advanceCreatedStateFor(session) {
   const script = "local raw=redis.call('GET',KEYS[1]) if not raw then return cjson.encode({error='Invalid session'}) end " +
     "local s=cjson.decode(raw) local now=tonumber(ARGV[1]) local total=tonumber(ARGV[2]) local changed=false " +
-    "if s.state=='question' and not s.startedAt then s.startedAt=now changed=true end " +
+    "if s.state=='question' and (not s.startedAt or s.startedAt==cjson.null) then s.startedAt=now changed=true end " +
     "if s.state=='question' and now-tonumber(s.startedAt)>=20000 then s.state='results' s.resultsStartedAt=now changed=true end " +
-    "if s.state=='results' and not s.resultsStartedAt then s.resultsStartedAt=now changed=true end " +
+    "if s.state=='results' and (not s.resultsStartedAt or s.resultsStartedAt==cjson.null) then s.resultsStartedAt=now changed=true end " +
     "if s.state=='results' and now-tonumber(s.resultsStartedAt)>=7000 then if s.question<total-1 then s.question=s.question+1 s.state='question' s.startedAt=now s.resultsStartedAt=cjson.null else s.state='finished' end changed=true end " +
-    "if changed then redis.call('SET',KEYS[1],cjson.encode(s)) end return cjson.encode(s)";
+    "if s.state=='finished' then s.status='Finished' end if changed then redis.call('SET',KEYS[1],cjson.encode(s)) end return cjson.encode(s)";
   const result = JSON.parse(await redisEval(script, [createdKey(session.id)], [String(Date.now()), String(createdQuestions(session).length)]));
   if (result.error) return null;
   result.custom = true;
@@ -77,8 +77,8 @@ async function advanceCreatedStateFor(session) {
 async function joinCreated(session, name) {
   const script = "local raw=redis.call('GET',KEYS[1]) if not raw then return cjson.encode({error='Invalid session'}) end " +
     "local s=cjson.decode(raw) if s.status~='Active' and s.status~='Live' then return cjson.encode({error='This quiz is not available yet.'}) end " +
-    "local id=ARGV[1] s.players[id]={id=id,name=ARGV[2],score=0,answers={}} redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)";
-  const id = Math.random().toString(36).slice(2,10);
+    "local id=ARGV[1] if s.players[id] then return cjson.encode({error='Please try joining again.'}) end s.players[id]={id=id,name=ARGV[2],score=0,answers={}} redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)";
+  const id = require('crypto').randomUUID();
   const result = JSON.parse(await redisEval(script, [createdKey(session.id)], [id, name]));
   if (result.error) return result;
   result.custom = true;
@@ -87,7 +87,7 @@ async function joinCreated(session, name) {
 async function controlCreated(session, command) {
   const script = "local raw=redis.call('GET',KEYS[1]) if not raw then return cjson.encode({error='Quiz not found.'}) end " +
     "local s=cjson.decode(raw) local now=tonumber(ARGV[2]) local command=ARGV[1] " +
-    "if command=='start' then s.state='question' s.status='Live' s.startedAt=now s.resultsStartedAt=cjson.null end " +
+    "if command=='start' and s.state=='lobby' then s.state='question' s.status='Live' s.startedAt=now s.resultsStartedAt=cjson.null end " +
     "if command=='end' then s.state='finished' s.status='Finished' s.resultsStartedAt=now end " +
     "if command=='reset' then s.state='lobby' s.status='Active' s.question=0 s.startedAt=cjson.null s.resultsStartedAt=cjson.null s.players={} end " +
     "redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)";
@@ -143,6 +143,13 @@ function redactQuestion(q) { return { id:q.id, category:q.category, text:q.text,
 function json(res, value, code=200) { res.writeHead(code, {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}); res.end(JSON.stringify(value)); }
 function body(req) { return new Promise((resolve,reject) => { let d=''; req.on('data', c => d += c); req.on('end', () => { try {resolve(d ? JSON.parse(d) : {});} catch(e){reject(e);} }); }); }
 
+function validQuestions(items) {
+  return Array.isArray(items) && items.length>0 && items.every(q =>
+    q && typeof q.text==='string' && q.text.trim() && Array.isArray(q.answers) &&
+    q.answers.length>=2 && q.answers.every(a=>typeof a==='string' && a.trim()) &&
+    Number.isInteger(q.correct) && q.correct>=0 && q.correct<q.answers.length);
+}
+
 async function api(req, res, pathname) {
   // Quiz maker records: a shared index per creator plus a 6-digit lookup key.
   if (pathname === '/api/quizzes' && req.method === 'GET') {
@@ -153,7 +160,7 @@ async function api(req, res, pathname) {
   }
   if (pathname === '/api/quizzes' && req.method === 'POST') {
     const quiz = await body(req); const owner=String(quiz.owner||'').slice(0,80);
-    if (!owner || !quiz.name || !Array.isArray(quiz.questions) || !quiz.questions.length) return json(res,{error:'Quiz information is incomplete.'},400);
+    if (!owner || !quiz.name || !validQuestions(quiz.questions)) return json(res,{error:'Quiz information is incomplete.'},400);
     let code; do { code=String(Math.floor(100000+Math.random()*900000)); } while (await redis('EXISTS',codeKey(code)));
     const id=`q_${Math.random().toString(36).slice(2,11)}`;
     const s={id,custom:true,code,status:'Draft',state:'lobby',question:0,startedAt:null,resultsStartedAt:null,players:{},owner,quiz:{...quiz,createdAt:quiz.createdAt||new Date().toISOString()}};
@@ -163,7 +170,36 @@ async function api(req, res, pathname) {
   const codeMatch = pathname.match(/^\/api\/quizzes\/code\/(\d{6})$/);
   if (codeMatch && req.method === 'GET') { const id=await redisGet(codeKey(codeMatch[1])); const s=id&&await getCreated(id); if(!s)return json(res,{error:'Invalid quiz code.'},404); if(s.status!=='Active'&&s.status!=='Live')return json(res,{error:'This quiz is not available yet.'},403); return json(res,{id:s.id,status:s.status,name:s.quiz.name}); }
   const quizMatch = pathname.match(/^\/api\/quizzes\/(q_[\w-]+)$/);
-  if (quizMatch && req.method === 'PATCH') { const s=await getCreated(quizMatch[1]); if(!s)return json(res,{error:'Quiz not found.'},404); const data=await body(req); if(data.command==='activate'){s.status='Active';s.state='lobby';} if(data.command==='deactivate')s.status='Inactive'; if(data.command==='delete'){await redis('DEL',createdKey(s.id)); return json(res,{deleted:true});} await saveCreated(s); return json(res,{...s.quiz,id:s.id,code:s.code,status:s.status}); }
+  if (quizMatch && req.method === 'PATCH') {
+    const data=await body(req);
+    if (!['activate','deactivate','delete','update'].includes(data.command)) return json(res,{error:'Unknown command.'},400);
+    if (data.command==='update' && (!String(data.name||'').trim() || !String(data.creator||'').trim() || !validQuestions(data.questions))) return json(res,{error:'Quiz information is incomplete.'},400);
+    const script = `
+      local raw=redis.call('GET',KEYS[1])
+      if not raw then return cjson.encode({error='Quiz not found.',code=404}) end
+      local s=cjson.decode(raw) local d=cjson.decode(ARGV[1])
+      if d.command=='delete' then
+        if s.state=='question' or s.state=='results' then return cjson.encode({error='End the live quiz before deleting it.',code=409}) end
+        redis.call('DEL',KEYS[1])
+        return cjson.encode({deleted=true})
+      elseif d.command=='update' then
+        if s.state=='question' or s.state=='results' then return cjson.encode({error='End the live quiz before editing it.',code=409}) end
+        s.quiz.name=d.name s.quiz.description=d.description or '' s.quiz.category=d.category or 'General' s.quiz.creator=d.creator s.quiz.questions=d.questions
+        s.state='lobby' s.status='Draft' s.question=0 s.startedAt=cjson.null s.resultsStartedAt=cjson.null s.players={}
+      elseif d.command=='activate' then
+        if s.state=='question' or s.state=='results' then return cjson.encode({error='This quiz is already live.',code=409}) end
+        s.status='Active' s.state='lobby' s.question=0 s.startedAt=cjson.null s.resultsStartedAt=cjson.null s.players={}
+      elseif d.command=='deactivate' then
+        if s.state=='question' or s.state=='results' then return cjson.encode({error='End the live quiz before deactivating it.',code=409}) end
+        s.status='Inactive'
+      end
+      redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)
+    `;
+    const updated=JSON.parse(await redisEval(script,[createdKey(quizMatch[1])],[JSON.stringify(data)]));
+    if(updated.error)return json(res,{error:updated.error},updated.code||400);
+    if(updated.deleted)return json(res,updated);
+    return json(res,{...updated.quiz,id:updated.id,code:updated.code,status:updated.status});
+  }
   const match = pathname.match(/^\/api\/sessions\/([^/]+)(?:\/(.+))?$/);
   if (!match) return json(res,{error:'Invalid session'},404);
   let s = sessions[match[1]];
@@ -171,7 +207,8 @@ async function api(req, res, pathname) {
   if (!s) return json(res,{error:'Invalid session'},404);
   const action = match[2] || '';
   if (s.custom) {
-    if (action === 'answer') {
+    if (req.method !== 'GET' && req.method !== 'POST') return json(res,{error:'Method not allowed.'},405);
+    if (req.method === 'POST' && action === 'answer') {
       const data = await body(req);
       const result = await recordCreatedAnswer(s, data);
       const updated = await advanceCreatedStateFor(s);
