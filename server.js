@@ -22,8 +22,8 @@ const questions = [
 
 // Created quizzes are persisted in Upstash.  The small REST wrapper avoids a
 // runtime dependency and works in Vercel serverless functions.
-const redisUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const redisToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+const redisUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || process.env.UPSTASH_REDIS_KV_REST_API_URL;
+const redisToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.UPSTASH_REDIS_KV_REST_API_TOKEN;
 async function redis(...command) {
   if (!redisUrl || !redisToken) throw Error('Live quiz storage is not configured.');
   const response = await fetch(redisUrl, {method:'POST', headers:{Authorization:`Bearer ${redisToken}`,'Content-Type':'application/json'}, body:JSON.stringify(command)});
