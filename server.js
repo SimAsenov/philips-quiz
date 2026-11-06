@@ -37,7 +37,14 @@ const redisEval = (script, keys, args = []) => redis('EVAL', script, keys.length
 const createdKey = id => `philips-quiz:created:${id}`;
 const codeKey = code => `philips-quiz:code:${code}`;
 const ownerKey = owner => `philips-quiz:owner:${owner}`;
+const reservedCodes = new Set(['100001','100002','100003']);
 const createdQuestions = s => s.quiz.questions.map((q,id)=>({id,category:s.quiz.category||'General',text:q.text,answers:q.answers,correct:Number(q.correct)||0}));
+
+function ownerCandidates(value) {
+  const values = Array.isArray(value?.owners) ? value.owners : [value?.owner];
+  return [...new Set(values.filter(x => typeof x === 'string').map(x => x.slice(0,80)).filter(Boolean))];
+}
+function quizRecord(s) { return {...s.quiz,id:s.id,code:s.code,status:s.status,createdAt:s.quiz.createdAt,owner:s.owner}; }
 
 // Custom quiz responses use an atomic Redis script. This prevents two
 // concurrent requests from recording the same player's answer twice.
@@ -48,15 +55,15 @@ async function recordCreatedAnswer(session, data) {
   if (!Number.isInteger(question) || !quizQuestion || !Number.isInteger(answer) || answer < 0 || answer >= quizQuestion.answers.length) return {error:'Your answer cannot be accepted.'};
   const script = "local raw=redis.call('GET',KEYS[1]) " +
     "if not raw then return cjson.encode({error='Invalid session'}) end " +
-    "local s=cjson.decode(raw) local p=s.players[ARGV[1]] local question=tonumber(ARGV[2]) local now=tonumber(ARGV[3]) local answer=tonumber(ARGV[4]) local correctAnswer=tonumber(ARGV[5]) " +
-    "if not p or s.state~='question' or question~=s.question then return cjson.encode({error='Your answer cannot be accepted.'}) end " +
+    "local s=cjson.decode(raw) local p=s.players[ARGV[1]] local question=tonumber(ARGV[2]) local now=tonumber(ARGV[3]) local answer=tonumber(ARGV[4]) local correctAnswer=tonumber(ARGV[5]) local token=ARGV[6] " +
+    "if not p or not p.token or p.token~=token or s.state~='question' or question~=s.question then return cjson.encode({error='Your answer cannot be accepted.'}) end " +
     "if (not s.startedAt or s.startedAt==cjson.null) then s.startedAt=now end " +
     "if now-s.startedAt>=20000 then s.state='results' s.resultsStartedAt=now redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode({error='Your answer cannot be accepted.'}) end " +
     "p.answers=p.answers or {} local key=tostring(question) local previous=p.answers[key] " +
     "if previous then return cjson.encode({correct=previous.correct,earned=previous.earned,alreadyAnswered=true}) end " +
     "local elapsed=math.max(0,now-s.startedAt) local correct=answer==correctAnswer local earned=0 if correct then earned=math.max(0,math.floor(1000*(1-elapsed/20000)+0.5)) end " +
     "p.answers[key]={answer=answer,correct=correct,earned=earned} p.score=(p.score or 0)+earned redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode({correct=correct,earned=earned})";
-  return JSON.parse(await redisEval(script, [createdKey(session.id)], [String(data.playerId || ''), String(question), String(Date.now()), String(answer), String(quizQuestion.correct)]));
+  return JSON.parse(await redisEval(script, [createdKey(session.id)], [String(data.playerId || ''), String(question), String(Date.now()), String(answer), String(quizQuestion.correct), String(data.playerToken || '')]));
 }
 // Every custom-quiz mutation (join, answer, host controls and time advances)
 // runs inside Redis. This prevents serverless instances from overwriting one
@@ -77,21 +84,23 @@ async function advanceCreatedStateFor(session) {
 async function joinCreated(session, name) {
   const script = "local raw=redis.call('GET',KEYS[1]) if not raw then return cjson.encode({error='Invalid session'}) end " +
     "local s=cjson.decode(raw) if s.status~='Active' and s.status~='Live' then return cjson.encode({error='This quiz is not available yet.'}) end " +
-    "local id=ARGV[1] if s.players[id] then return cjson.encode({error='Please try joining again.'}) end s.players[id]={id=id,name=ARGV[2],score=0,answers={}} redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)";
+    "local id=ARGV[1] if s.players[id] then return cjson.encode({error='Please try joining again.'}) end s.players[id]={id=id,name=ARGV[2],score=0,answers={},token=ARGV[3]} redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)";
   const id = require('crypto').randomUUID();
-  const result = JSON.parse(await redisEval(script, [createdKey(session.id)], [id, name]));
+  const token = require('crypto').randomUUID();
+  const result = JSON.parse(await redisEval(script, [createdKey(session.id)], [id, name, token]));
   if (result.error) return result;
   result.custom = true;
-  return {playerId:id, session:result};
+  return {playerId:id, playerToken:token, session:result};
 }
-async function controlCreated(session, command) {
+async function controlCreated(session, command, owners) {
+  if (!['start','end','reset'].includes(command)) return {error:'Unknown command.'};
   const script = "local raw=redis.call('GET',KEYS[1]) if not raw then return cjson.encode({error='Quiz not found.'}) end " +
-    "local s=cjson.decode(raw) local now=tonumber(ARGV[2]) local command=ARGV[1] " +
+    "local s=cjson.decode(raw) local now=tonumber(ARGV[2]) local command=ARGV[1] local owners=cjson.decode(ARGV[3]) local allowed=false for _,owner in ipairs(owners) do if owner==s.owner then allowed=true end end if not allowed then return cjson.encode({error='Only the quiz owner can control this session.',code=403}) end " +
     "if command=='start' and s.state=='lobby' then s.state='question' s.status='Live' s.startedAt=now s.resultsStartedAt=cjson.null end " +
     "if command=='end' then s.state='finished' s.status='Finished' s.resultsStartedAt=now end " +
     "if command=='reset' then s.state='lobby' s.status='Active' s.question=0 s.startedAt=cjson.null s.resultsStartedAt=cjson.null s.players={} end " +
     "redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)";
-  const result = JSON.parse(await redisEval(script, [createdKey(session.id)], [command, String(Date.now())]));
+  const result = JSON.parse(await redisEval(script, [createdKey(session.id)], [command, String(Date.now()), JSON.stringify(owners)]));
   if (result.error) return null;
   result.custom = true;
   return result;
@@ -131,22 +140,24 @@ function leaderBoard(s) { return Object.values(s.players).map(({id,name,score}) 
 function publicState(s, playerId) {
   const quizQuestions = s.custom ? createdQuestions(s) : questions;
   const q = quizQuestions[s.question];
-  const answer = playerId && s.players[playerId] ? s.players[playerId].answers[s.question] : null;
+  const player = playerId && s.players[playerId] ? s.players[playerId] : null;
+  const answer = player ? player.answers[s.question] : null;
+  const ranking = leaderBoard(s);
   return {
-    id:s.id, code:s.custom?s.code:null, custom:!!s.custom, title:s.custom?s.quiz.name:`Session ${s.id}`, status:s.status || (s.state==='lobby'?'Active':s.state==='question'?'Live':s.state==='finished'?'Finished':'Active'), state:s.state, question:s.question, total:quizQuestions.length, startedAt:s.startedAt, resultsStartedAt:s.resultsStartedAt,
+    id:s.id, code:s.custom?s.code:null, custom:!!s.custom, title:s.custom?s.quiz.name:`Session ${s.id}`, status:s.status || (s.state==='lobby'?'Active':s.state==='question'?'Live':s.state==='finished'?'Finished':'Active'), state:s.state, question:s.question, total:quizQuestions.length, startedAt:s.startedAt, resultsStartedAt:s.resultsStartedAt, serverNow:Date.now(),
     questionData: s.state === 'question' ? redactQuestion(q) : null,
     reveal: s.state === 'results' || s.state === 'finished' ? {category:q.category, text:q.text, answers:q.answers, correct:q.correct, correctAnswer:q.answers[q.correct]} : null,
-    myAnswer: answer || null, players: leaderBoard(s), answered: Object.values(s.players).filter(p => p.answers[s.question] !== undefined).length
+    myAnswer: answer || null, myScore:player ? player.score : null, myRank:player ? ranking.findIndex(p => p.id===playerId)+1 : null, players: ranking.map(({name,score}) => ({name,score})), answered: Object.values(s.players).filter(p => p.answers[s.question] !== undefined).length
   };
 }
 function redactQuestion(q) { return { id:q.id, category:q.category, text:q.text, answers:q.answers }; }
 function json(res, value, code=200) { res.writeHead(code, {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}); res.end(JSON.stringify(value)); }
-function body(req) { return new Promise((resolve,reject) => { let d=''; req.on('data', c => d += c); req.on('end', () => { try {resolve(d ? JSON.parse(d) : {});} catch(e){reject(e);} }); }); }
+function body(req) { return new Promise((resolve,reject) => { let d='', size=0,done=false; const fail=e=>{if(!done){done=true;reject(e);}}; req.on('data', c => {size+=typeof Buffer==='undefined'?String(c).length:Buffer.byteLength(c);if(size>65536){if(req.resume)req.resume();return fail(Error('Request body is too large.'));}d+=c;}); req.on('end', () => {if(done)return;try{done=true;resolve(d ? JSON.parse(d) : {});}catch(e){fail(e);}}); req.on('error',fail); }); }
 
 function validQuestions(items) {
   return Array.isArray(items) && items.length>0 && items.every(q =>
     q && typeof q.text==='string' && q.text.trim() && Array.isArray(q.answers) &&
-    q.answers.length>=2 && q.answers.every(a=>typeof a==='string' && a.trim()) &&
+    q.answers.length>=2 && q.answers.every(a=>typeof a==='string' && a.trim()) && new Set(q.answers.map(a=>a.trim().toLocaleLowerCase())).size===q.answers.length &&
     Number.isInteger(q.correct) && q.correct>=0 && q.correct<q.answers.length);
 }
 
@@ -155,17 +166,24 @@ async function api(req, res, pathname) {
   if (pathname === '/api/quizzes' && req.method === 'GET') {
     const owner = new URL(req.url, `http://${req.headers.host}`).searchParams.get('owner');
     const ids = owner ? (await redisGet(ownerKey(owner)) || []) : [];
-    const items = (await Promise.all(ids.map(getCreated))).filter(Boolean).map(s => ({...s.quiz,id:s.id,code:s.code,status:s.status,createdAt:s.quiz.createdAt}));
+    const items = (await Promise.all(ids.map(getCreated))).filter(Boolean).map(quizRecord);
     return json(res, items);
   }
   if (pathname === '/api/quizzes' && req.method === 'POST') {
     const quiz = await body(req); const owner=String(quiz.owner||'').slice(0,80);
     if (!owner || !quiz.name || !validQuestions(quiz.questions)) return json(res,{error:'Quiz information is incomplete.'},400);
-    let code; do { code=String(Math.floor(100000+Math.random()*900000)); } while (await redis('EXISTS',codeKey(code)));
-    const id=`q_${Math.random().toString(36).slice(2,11)}`;
-    const s={id,custom:true,code,status:'Draft',state:'lobby',question:0,startedAt:null,resultsStartedAt:null,players:{},owner,quiz:{...quiz,createdAt:quiz.createdAt||new Date().toISOString()}};
-    await saveCreated(s); await redisSet(codeKey(code),id); const ids=await redisGet(ownerKey(owner))||[]; await redisSet(ownerKey(owner),[id,...ids]);
-    return json(res,{...s.quiz,id,code,status:s.status});
+    for (let attempt=0;attempt<20;attempt++) {
+      const code=String(Math.floor(100000+Math.random()*900000));
+      if (reservedCodes.has(code)) continue;
+      const id=`q_${require('crypto').randomUUID().replace(/-/g,'').slice(0,12)}`;
+      // Reserving the public code with NX closes the race between simultaneous creators.
+      if (!(await redis('SET',codeKey(code),id,'NX'))) continue;
+      const s={id,custom:true,code,status:'Draft',state:'lobby',question:0,startedAt:null,resultsStartedAt:null,players:{},owner,quiz:{...quiz,createdAt:quiz.createdAt||new Date().toISOString()}};
+      const script="local ids=cjson.decode(redis.call('GET',KEYS[2]) or '[]') table.insert(ids,1,ARGV[2]) redis.call('SET',KEYS[1],ARGV[1]) redis.call('SET',KEYS[2],cjson.encode(ids)) return 'OK'";
+      await redisEval(script,[createdKey(id),ownerKey(owner)],[JSON.stringify(s),id]);
+      return json(res,quizRecord(s));
+    }
+    return json(res,{error:'A quiz code could not be allocated. Please try again.'},503);
   }
   const codeMatch = pathname.match(/^\/api\/quizzes\/code\/(\d{6})$/);
   if (codeMatch && req.method === 'GET') { const id=await redisGet(codeKey(codeMatch[1])); const s=id&&await getCreated(id); if(!s)return json(res,{error:'Invalid quiz code.'},404); if(s.status!=='Active'&&s.status!=='Live')return json(res,{error:'This quiz is not available yet.'},403); return json(res,{id:s.id,status:s.status,name:s.quiz.name}); }
@@ -173,14 +191,20 @@ async function api(req, res, pathname) {
   if (quizMatch && req.method === 'PATCH') {
     const data=await body(req);
     if (!['activate','deactivate','delete','update'].includes(data.command)) return json(res,{error:'Unknown command.'},400);
+    const owners=ownerCandidates(data);
+    if (!owners.length) return json(res,{error:'Only the quiz owner can change this quiz.'},403);
     if (data.command==='update' && (!String(data.name||'').trim() || !String(data.creator||'').trim() || !validQuestions(data.questions))) return json(res,{error:'Quiz information is incomplete.'},400);
     const script = `
       local raw=redis.call('GET',KEYS[1])
       if not raw then return cjson.encode({error='Quiz not found.',code=404}) end
       local s=cjson.decode(raw) local d=cjson.decode(ARGV[1])
+      local allowed=false for _,owner in ipairs(d.owners or {d.owner}) do if owner==s.owner then allowed=true end end
+      if not allowed then return cjson.encode({error='Only the quiz owner can change this quiz.',code=403}) end
       if d.command=='delete' then
         if s.state=='question' or s.state=='results' then return cjson.encode({error='End the live quiz before deleting it.',code=409}) end
         redis.call('DEL',KEYS[1])
+        redis.call('DEL',KEYS[2])
+        local ids=cjson.decode(redis.call('GET',KEYS[3]) or '[]') local remaining={} for _,id in ipairs(ids) do if id~=s.id then table.insert(remaining,id) end end redis.call('SET',KEYS[3],cjson.encode(remaining))
         return cjson.encode({deleted=true})
       elseif d.command=='update' then
         if s.state=='question' or s.state=='results' then return cjson.encode({error='End the live quiz before editing it.',code=409}) end
@@ -195,10 +219,12 @@ async function api(req, res, pathname) {
       end
       redis.call('SET',KEYS[1],cjson.encode(s)) return cjson.encode(s)
     `;
-    const updated=JSON.parse(await redisEval(script,[createdKey(quizMatch[1])],[JSON.stringify(data)]));
+    data.owners=owners;
+    const existing=await getCreated(quizMatch[1]);
+    const updated=JSON.parse(await redisEval(script,[createdKey(quizMatch[1]),codeKey(existing?.code||''),ownerKey(existing?.owner||'')],[JSON.stringify(data)]));
     if(updated.error)return json(res,{error:updated.error},updated.code||400);
     if(updated.deleted)return json(res,updated);
-    return json(res,{...updated.quiz,id:updated.id,code:updated.code,status:updated.status});
+    return json(res,quizRecord(updated));
   }
   const match = pathname.match(/^\/api\/sessions\/([^/]+)(?:\/(.+))?$/);
   if (!match) return json(res,{error:'Invalid session'},404);
@@ -227,11 +253,12 @@ async function api(req, res, pathname) {
       if (!name) return json(res,{error:'Please enter your name.'},400);
       const joined = await joinCreated(s, name);
       if (joined.error) return json(res,joined,403);
-      return json(res,{playerId:joined.playerId,state:publicState(joined.session, joined.playerId)});
+      return json(res,{playerId:joined.playerId,playerToken:joined.playerToken,state:publicState(joined.session, joined.playerId)});
     }
     if (action === 'host') {
-      const updated = await controlCreated(s, data.command);
+      const updated = await controlCreated(s, data.command, ownerCandidates(data));
       if (!updated) return json(res,{error:'Quiz not found.'},404);
+      if (updated.error) return json(res,{error:updated.error},updated.code||400);
       return json(res, publicState(updated));
     }
     return json(res,{error:'Unknown command.'},400);
@@ -282,11 +309,12 @@ const handler = async (req,res) => {
   try {
     if (url.pathname.startsWith('/api/')) return await api(req,res,url.pathname);
     const file = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\//,'');
-    const full = path.normalize(path.join(publicDir,file));
-    if (!full.startsWith(publicDir) || !fs.existsSync(full)) { res.writeHead(404); return res.end('Not found'); }
+    const full = path.resolve(publicDir,file);
+    const relative = path.relative(publicDir,full);
+    if (relative.startsWith('..') || path.isAbsolute(relative) || !fs.existsSync(full)) { res.writeHead(404); return res.end('Not found'); }
     const type = full.endsWith('.html')?'text/html; charset=utf-8':full.endsWith('.css')?'text/css':full.endsWith('.js')?'application/javascript':'application/octet-stream';
     res.writeHead(200,{'Content-Type':type}); fs.createReadStream(full).pipe(res);
-  } catch(e) { json(res,{error:e.message},500); }
+  } catch(e) { console.error(e); json(res,{error:e.message==='Request body is too large.'?e.message:'The quiz service is temporarily unavailable. Please try again.'},e.message==='Request body is too large.'?413:500); }
 };
 if (require.main === module) http.createServer(handler).listen(PORT, '0.0.0.0', () => {
   const ips = Object.values(os.networkInterfaces()).flat().filter(x=>x && x.family==='IPv4' && !x.internal).map(x=>x.address);
@@ -294,3 +322,4 @@ if (require.main === module) http.createServer(handler).listen(PORT, '0.0.0.0', 
 });
 
 module.exports = handler;
+

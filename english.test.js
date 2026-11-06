@@ -45,7 +45,7 @@ test('navigation, editing, lobby and status messages render English directly', (
     ['home()', 'HOW IT WORKS'], ['choose()', 'Choose a session'],
     ['showCreate()', 'Create a Quiz'], ['showJoinCode()', '6-digit quiz code'],
     ['join()', 'Ready to join?'], ['waitingForNext()', 'Your answer is recorded'],
-    ['connectionError()', 'This live quiz link is not available'],
+    ['connectionError()', 'Connection is being restored'],
     ['renderLibrary([])', 'No Quizzes Yet']
   ];
   for (const [action, expected] of cases) {
@@ -110,3 +110,4 @@ test('all lifecycle screens and management labels remain English', () => {
     }
   }
 });
+
